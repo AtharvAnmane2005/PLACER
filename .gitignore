@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.venv311/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Env
+.env
+*.env.local
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+# TypeScript incremental build cache — machine-local, regenerated on build
+tsconfig.tsbuildinfo
+
+# ML artifacts
+*.bin
+*.pt
+*.safetensors
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Python virtual environments
+.venv/
+.venv311/
+venv/
+
+# Local storage
+backend/storage/
+mongodb-data/
+# Local database dumps (contain live user data - never commit)
+db_backups/
+# Local tooling
+*.exe
