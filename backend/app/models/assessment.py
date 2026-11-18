@@ -40,8 +40,47 @@ DIFFICULTY_MARKS = {DifficultyLevel.EASY: 1, DifficultyLevel.MEDIUM: 3, Difficul
 
 class QuestionType(str, Enum):
     MCQ = "mcq"
+    MULTIPLE_SELECT = "multiple_select"
+    TRUE_FALSE = "true_false"
     CODING = "coding"
     DESCRIPTIVE = "descriptive"
+
+
+class QuestionStatus(str, Enum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
+
+class AssessmentFormat(str, Enum):
+    """Adaptive (legacy engine) vs fixed-set standardized assessments."""
+
+    ADAPTIVE = "adaptive"
+    STANDARDIZED = "standardized"
+
+
+class AssessmentPublishStatus(str, Enum):
+    DRAFT = "draft"
+    PUBLISHED = "published"
+
+
+# Exactly five equal sections / six-ten-four difficulty mix for every
+# standardized placement-drive assessment. These are assessment *rules*,
+# not question content — no questions are fabricated from them.
+PLACEMENT_SECTIONS: tuple[str, ...] = (
+    "Quantitative Aptitude",
+    "Logical Reasoning",
+    "Verbal Ability",
+    "Technical Knowledge",
+    "Programming / Problem Solving",
+)
+PLACEMENT_SECTION_SIZE = 4
+PLACEMENT_TOTAL_QUESTIONS = 20
+PLACEMENT_DIFFICULTY_QUOTA = {
+    DifficultyLevel.EASY: 6,
+    DifficultyLevel.MEDIUM: 10,
+    DifficultyLevel.HARD: 4,
+}
+OBJECTIVE_QUESTION_TYPES = (QuestionType.MCQ, QuestionType.MULTIPLE_SELECT, QuestionType.TRUE_FALSE)
 
 
 class CodingLanguage(str, Enum):
@@ -102,6 +141,13 @@ class QuestionInDB(MongoBaseModel):
     company_tags: list[str] = Field(default_factory=list)
     created_by: PyObjectId
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    # --- Optional management metadata. Missing on legacy seeded questions;
+    # services treat those as active with topic derived from skill_tags[0].
+    topic: str | None = None
+    skill: str | None = None
+    explanation: str | None = None
+    status: QuestionStatus = QuestionStatus.ACTIVE
+    updated_at: datetime | None = None
 
 
 class AssessmentInDB(MongoBaseModel):
@@ -115,12 +161,28 @@ class AssessmentInDB(MongoBaseModel):
     created_by: PyObjectId
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
+    # --- Standardized assessment configuration (optional; legacy assessments
+    # keep the adaptive defaults and are completely unaffected).
+    format: AssessmentFormat = AssessmentFormat.ADAPTIVE
+    status: AssessmentPublishStatus = AssessmentPublishStatus.DRAFT
+    question_ids: list[str] = Field(default_factory=list)  # fixed, ordered, immutable after publish
+    sections: list[dict] = Field(default_factory=list)  # section metadata + per-section question IDs
+    total_marks: int = 0
+    passing_marks: int = 0
+    negative_marks: float = 0.0
+    instructions: str = ""
+    allow_retake: bool = False
+    randomize_options: bool = True
+    template_id: str | None = None
+    generated_at: datetime | None = None
+    published_at: datetime | None = None
+
 
 class AnsweredQuestion(BaseModel):
     question_id: str
     response: str
     is_correct: bool | None  # None for descriptive (ungraded)
-    marks_awarded: int
+    marks_awarded: float  # float to support fractional negative marking
     time_taken_sec: float | None = None
     difficulty_at_time: DifficultyLevel
     question_type: QuestionType | None = None  # stored for results, old records may omit it
@@ -180,6 +242,11 @@ class QuestionCreateRequest(BaseModel):
     starter_code: str | None = None
     test_cases: list[TestCase] = Field(default_factory=list)
     company_tags: list[str] = Field(default_factory=list)
+    topic: str | None = None
+    skill: str | None = None
+    explanation: str | None = None
+    status: QuestionStatus = QuestionStatus.ACTIVE
+    marks: int | None = Field(default=None, ge=0, le=100)
 
 
 class QuestionUpdateRequest(BaseModel):
@@ -194,6 +261,11 @@ class QuestionUpdateRequest(BaseModel):
     starter_code: str | None = None
     test_cases: list[TestCase] | None = None
     company_tags: list[str] | None = None
+    topic: str | None = None
+    skill: str | None = None
+    explanation: str | None = None
+    status: QuestionStatus | None = None
+    marks: int | None = Field(default=None, ge=0, le=100)
 
 
 class QuestionAdminResponse(BaseModel):
@@ -212,6 +284,11 @@ class QuestionAdminResponse(BaseModel):
     test_cases: list[TestCase] = Field(default_factory=list)
     marks: int
     company_tags: list[str]
+    topic: str | None = None
+    skill: str | None = None
+    explanation: str | None = None
+    status: QuestionStatus = QuestionStatus.ACTIVE
+    updated_at: datetime | None = None
 
 
 class QuestionStudentView(BaseModel):
@@ -237,6 +314,10 @@ class AssessmentCreateRequest(BaseModel):
     max_violations: int = Field(default=3, ge=1, le=20)
     require_fullscreen: bool = True
     type: AssessmentType = AssessmentType.PRACTICE
+    format: AssessmentFormat = AssessmentFormat.ADAPTIVE
+    instructions: str = ""
+    allow_retake: bool = False
+    negative_marks: float = Field(default=0.0, ge=0.0, le=100.0)
 
 
 class AssessmentResponse(BaseModel):
@@ -248,6 +329,16 @@ class AssessmentResponse(BaseModel):
     anti_cheat_config: dict
     type: AssessmentType
     drive_id: str | None = None
+    format: AssessmentFormat = AssessmentFormat.ADAPTIVE
+    status: AssessmentPublishStatus = AssessmentPublishStatus.DRAFT
+    question_count: int = 0
+    total_marks: int = 0
+    passing_marks: int = 0
+    negative_marks: float = 0.0
+    instructions: str = ""
+    allow_retake: bool = False
+    template_id: str | None = None
+    sections: list[dict] = Field(default_factory=list)
 
 
 class CodeTestCaseResult(BaseModel):
@@ -290,6 +381,15 @@ class StartAttemptResponse(BaseModel):
     time_remaining_sec: int
     anti_cheat_config: dict
     next_question: QuestionStudentView | None
+    # Standardized attempts receive the full ordered, student-safe question
+    # set up front so the UI can offer navigation. Adaptive attempts leave
+    # these empty and keep using next_question.
+    questions: list[QuestionStudentView] = Field(default_factory=list)
+    answered_question_ids: list[str] = Field(default_factory=list)
+    total_questions: int = 0
+    format: AssessmentFormat = AssessmentFormat.ADAPTIVE
+    instructions: str = ""
+    total_marks: int = 0
 
 
 class SubmitAnswerRequest(BaseModel):
@@ -301,10 +401,11 @@ class SubmitAnswerRequest(BaseModel):
 
 class SubmitAnswerResponse(BaseModel):
     is_correct: bool | None
-    marks_awarded: int
+    marks_awarded: float
     next_question: QuestionStudentView | None
     attempt_status: AttemptStatus
     code_result: CodeRunSummary | None = None
+    answered_question_ids: list[str] = Field(default_factory=list)
 
 
 class FinishAttemptRequest(BaseModel):
@@ -315,7 +416,7 @@ class FinishAttemptResponse(BaseModel):
     attempt_id: str
     status: AttemptStatus
     questions_answered: int
-    total_marks: int
+    total_marks: float
     max_possible_marks: int
     submitted_at: datetime | None
 
@@ -349,15 +450,19 @@ class AttemptAnswerDetail(BaseModel):
     text: str
     response: str
     is_correct: bool | None
-    marks_awarded: int
+    marks_awarded: float
     max_marks: int
     code_result: CodeRunSummary | None = None
+    # Revealed only after the attempt has been submitted.
+    correct_answer: str | None = None
+    explanation: str | None = None
+    section: str | None = None
 
 
 class AttemptResultResponse(BaseModel):
     attempt_id: str
     status: AttemptStatus
-    total_marks: int
+    total_marks: float
     max_possible_marks: int
     questions_answered: int
     started_at: datetime
@@ -365,8 +470,217 @@ class AttemptResultResponse(BaseModel):
     answers: list[AttemptAnswerDetail] = Field(default_factory=list)
 
 
+class AttemptQuestionsResponse(BaseModel):
+    attempt_id: str
+    format: AssessmentFormat
+    total_questions: int
+    questions: list[QuestionStudentView] = Field(default_factory=list)
+    answered_question_ids: list[str] = Field(default_factory=list)
+    instructions: str = ""
+
+
 class KnowledgeStateResponse(BaseModel):
     skill_tag: str
     mastery_pct: float
     confidence: float
     attempts_count: int
+
+
+# ---------------------------------------------------------------------------
+# Question-bank management / import / export schemas
+# ---------------------------------------------------------------------------
+class QuestionStatsResponse(BaseModel):
+    total: int
+    active: int
+    inactive: int
+    by_category: dict[str, int]
+    by_difficulty: dict[str, int]
+    by_type: dict[str, int]
+
+
+class ImportRowError(BaseModel):
+    row: int  # 1-based spreadsheet row number (header is row 1)
+    field: str
+    message: str
+
+
+class ImportPreviewRow(BaseModel):
+    row: int
+    question: QuestionCreateRequest | None = None
+    raw_text: str | None = None  # retained for invalid-row error reports
+    errors: list[ImportRowError] = Field(default_factory=list)
+
+
+class ImportPreviewResponse(BaseModel):
+    filename: str
+    detected_columns: dict[str, str]
+    total_rows: int
+    valid_rows: int
+    invalid_rows: int
+    duplicate_rows: int
+    rows: list[ImportPreviewRow] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Reusable assessment templates
+# ---------------------------------------------------------------------------
+class TemplateStatus(str, Enum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
+
+class SectionConfig(BaseModel):
+    name: str
+    questions: int = Field(default=0, ge=0, le=100)
+    category_ids: list[str] = Field(default_factory=list)
+    difficulty: DifficultyLevel | None = None
+
+
+class AssessmentTemplateInDB(MongoBaseModel):
+    name: str
+    description: str = ""
+    category_ids: list[str] = Field(default_factory=list)
+    sections: list[SectionConfig] = Field(default_factory=list)
+    difficulty_distribution: dict[str, int] = Field(default_factory=dict)
+    question_types: list[QuestionType] = Field(default_factory=list)
+    topics: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    total_questions: int = 0
+    total_marks: int = 0
+    time_limit_sec: int = 1800
+    passing_marks: int = 0
+    negative_marks: float = 0.0
+    instructions: str = ""
+    randomize_options: bool = True
+    allow_retake: bool = False
+    status: TemplateStatus = TemplateStatus.ACTIVE
+    format: AssessmentFormat = AssessmentFormat.ADAPTIVE
+    preset_key: str | None = None
+    created_by: PyObjectId
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime | None = None
+
+
+class AssessmentTemplateUpsertRequest(BaseModel):
+    name: str
+    description: str = ""
+    category_ids: list[str] = Field(default_factory=list)
+    sections: list[SectionConfig] = Field(default_factory=list)
+    difficulty_distribution: dict[str, int] = Field(default_factory=dict)
+    question_types: list[QuestionType] = Field(default_factory=list)
+    topics: list[str] = Field(default_factory=list)
+    skills: list[str] = Field(default_factory=list)
+    total_questions: int = Field(default=0, ge=0, le=200)
+    total_marks: int = Field(default=0, ge=0, le=2000)
+    time_limit_sec: int = Field(default=1800, ge=60)
+    passing_marks: int = Field(default=0, ge=0, le=2000)
+    negative_marks: float = Field(default=0.0, ge=0.0, le=100.0)
+    instructions: str = ""
+    randomize_options: bool = True
+    allow_retake: bool = False
+    status: TemplateStatus = TemplateStatus.ACTIVE
+    format: AssessmentFormat = AssessmentFormat.ADAPTIVE
+    preset_key: str | None = None
+
+
+class AssessmentTemplateResponse(BaseModel):
+    id: str
+    name: str
+    description: str
+    category_ids: list[str]
+    sections: list[SectionConfig]
+    difficulty_distribution: dict[str, int]
+    question_types: list[QuestionType]
+    topics: list[str]
+    skills: list[str]
+    total_questions: int
+    total_marks: int
+    time_limit_sec: int
+    passing_marks: int
+    negative_marks: float
+    instructions: str
+    randomize_options: bool
+    allow_retake: bool
+    status: TemplateStatus
+    format: AssessmentFormat
+    preset_key: str | None = None
+    created_at: datetime
+    updated_at: datetime | None = None
+
+
+class TemplatePresetResponse(BaseModel):
+    key: str
+    name: str
+    description: str
+    config: AssessmentTemplateUpsertRequest
+
+
+# ---------------------------------------------------------------------------
+# Standardized placement-drive assessment generation
+# ---------------------------------------------------------------------------
+class PlacementSectionRequest(BaseModel):
+    name: str
+    category_ids: list[str] = Field(default_factory=list)
+    skill_tags: list[str] = Field(default_factory=list)
+
+
+class PlacementGenerationRequest(BaseModel):
+    drive_id: str
+    title: str | None = None
+    time_limit_minutes: int = Field(default=30, ge=1, le=300)
+    passing_marks: int = Field(default=0, ge=0, le=2000)
+    negative_marks: float = Field(default=0.0, ge=0.0, le=100.0)
+    instructions: str = ""
+    allow_retake: bool = False
+    sections: list[PlacementSectionRequest] = Field(default_factory=list)
+    template_id: str | None = None
+    publish: bool = False
+
+
+class PlacementQuestionView(BaseModel):
+    id: str
+    text: str
+    section: str
+    difficulty: DifficultyLevel
+    type: QuestionType
+    topic: str | None = None
+    skill: str | None = None
+    marks: int
+
+
+class PlacementGenerationResponse(BaseModel):
+    assessment_id: str
+    title: str
+    drive_id: str
+    format: AssessmentFormat
+    status: AssessmentPublishStatus
+    total_questions: int
+    total_marks: int
+    time_limit_sec: int
+    sections: list[dict]
+    questions: list[PlacementQuestionView]
+    template_id: str | None = None
+    deficit: list[str] = Field(default_factory=list)
+
+
+class PlacementEligibilityResponse(BaseModel):
+    can_generate: bool
+    sections: list[dict]
+    deficits: list[str] = Field(default_factory=list)
+
+
+class PlacementParticipationResponse(BaseModel):
+    drive_id: str
+    assessment_id: str
+    eligible_students: int
+    attempts_started: int
+    submitted: int
+    in_progress: int
+    students: list[dict] = Field(default_factory=list)
+
+
+class PlacementRevisionRequest(BaseModel):
+    confirm_republish: bool = False
+    reason: str = ""
+    time_limit_minutes: int | None = Field(default=None, ge=1, le=300)
+    publish: bool = True

@@ -51,6 +51,8 @@ export function useApplyToDrive() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: MY_APPLICATIONS_KEY });
+      // A new application changes status counts, rates and drill-downs.
+      queryClient.invalidateQueries({ queryKey: ["analytics"] });
     },
   });
 }

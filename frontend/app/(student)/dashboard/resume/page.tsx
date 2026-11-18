@@ -41,7 +41,7 @@ export default function ResumePage() {
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = "";
-    if (!file) return;
+    if (!file || uploadResume.isPending) return;
     try {
       const uploaded = await uploadResume.mutateAsync(file);
       setSelectedId(uploaded.id);
@@ -90,13 +90,13 @@ export default function ResumePage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <h1 className="font-display text-2xl font-semibold">Resume</h1>
           <p className="text-sm text-muted-foreground">Upload a resume and review what our parser extracted.</p>
         </div>
-        <label>
-          <Button asChild disabled={uploadResume.isPending}>
+        <label className="shrink-0">
+          <Button asChild disabled={uploadResume.isPending} aria-disabled={uploadResume.isPending}>
             <span className="cursor-pointer">
               <Upload className="mr-2 h-4 w-4" />
               {uploadResume.isPending ? "Uploading…" : "Upload new version"}
@@ -115,7 +115,7 @@ export default function ResumePage() {
           description="Upload a PDF or Word resume to get started. It'll be parsed automatically and used for drive applications."
         />
       ) : (
-        <div className="grid gap-6 lg:grid-cols-3">
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           <Card className="lg:col-span-1">
             <CardHeader>
               <CardTitle className="text-base">Versions</CardTitle>
@@ -145,12 +145,12 @@ export default function ResumePage() {
           </Card>
 
           <Card className="lg:col-span-2">
-            <CardHeader className="flex flex-row items-start justify-between space-y-0">
-              <div>
+            <CardHeader className="flex flex-col gap-3 space-y-0 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
                 <CardTitle className="text-base">Parsed data</CardTitle>
-                <CardDescription>{detail?.original_filename}</CardDescription>
+                <CardDescription className="truncate">{detail?.original_filename}</CardDescription>
               </div>
-              <div className="flex gap-2">
+              <div className="flex shrink-0 flex-wrap gap-2">
                 <Button size="sm" variant="outline" onClick={handleReparse} disabled={reparseResume.isPending}>
                   <RefreshCw className={cn("mr-2 h-3.5 w-3.5", reparseResume.isPending && "animate-spin")} />
                   Re-parse
@@ -170,7 +170,7 @@ export default function ResumePage() {
                 </p>
               ) : (
                 <div className="space-y-4 text-sm">
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                     <div>
                       <span className="text-muted-foreground">Name: </span>
                       {detail.parsed.name ?? "—"}

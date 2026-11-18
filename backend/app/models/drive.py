@@ -37,12 +37,29 @@ class RejectionReason(str, Enum):
     OTHER = "other"
 
 
-# Valid status transitions — terminal states cannot change.
+# The three statuses the current placement workflow can set. ``selected`` is
+# kept in the enum only so legacy documents remain valid; the API never
+# produces it and the TPO dashboards do not show it as a stage.
+MANAGED_APPLICATION_STATUSES: frozenset[ApplicationStatus] = frozenset(
+    {
+        ApplicationStatus.APPLIED,
+        ApplicationStatus.SHORTLISTED,
+        ApplicationStatus.REJECTED,
+    }
+)
+
+# Free toggling among the managed statuses: the placement team may reverse a
+# decision (un-shortlist, re-open, etc.). A legacy ``selected`` record can be
+# corrected back into the managed workflow, but this endpoint never sets it.
 VALID_STATUS_TRANSITIONS: dict[ApplicationStatus, set[ApplicationStatus]] = {
     ApplicationStatus.APPLIED: {ApplicationStatus.SHORTLISTED, ApplicationStatus.REJECTED},
-    ApplicationStatus.SHORTLISTED: {ApplicationStatus.SELECTED, ApplicationStatus.REJECTED},
-    ApplicationStatus.SELECTED: set(),    # terminal
-    ApplicationStatus.REJECTED: set(),    # terminal
+    ApplicationStatus.SHORTLISTED: {ApplicationStatus.APPLIED, ApplicationStatus.REJECTED},
+    ApplicationStatus.REJECTED: {ApplicationStatus.APPLIED, ApplicationStatus.SHORTLISTED},
+    ApplicationStatus.SELECTED: {
+        ApplicationStatus.APPLIED,
+        ApplicationStatus.SHORTLISTED,
+        ApplicationStatus.REJECTED,
+    },
 }
 
 
@@ -227,6 +244,9 @@ class ApplicationResponse(BaseModel):
     rejection_reasons: list[str] = Field(default_factory=list)
     rejection_note: str | None = None
     decision_at: datetime | None = None
+    # Provenance (see MongoBaseModel) — surfaced so the UI can mark demo rows.
+    data_origin: str = "genuine"
+    is_synthetic: bool = False
 
 
 class ApplicationDetail(ApplicationResponse):
@@ -257,5 +277,4 @@ class ScreeningSummary(BaseModel):
     assessment_not_required: int
     shortlisted: int
     rejected: int
-    selected: int
     recommended_shortlist: int

@@ -10,15 +10,17 @@ from app.models.drive import (
     DriveCreateRequest,
     DriveStatus,
     DriveUpdateRequest,
+    MANAGED_APPLICATION_STATUSES,
     PlacementDriveInDB,
-    VALID_STATUS_TRANSITIONS,
 )
+from app.core.departments import department_matches, normalize_departments
 from app.models.assessment import AssessmentType
 from app.models.user import StudentInDB
 from app.repositories.application_repository import ApplicationRepository
 from app.repositories.assessment_repository import AssessmentRepository
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.drive_repository import PlacementDriveRepository
+from app.repositories.activity_log_repository import log_activity
 from app.repositories.profile_repositories import StudentRepository, TPORepository
 
 
@@ -27,6 +29,11 @@ class DriveError(Exception):
         self.message = message
         self.status_code = status_code
         super().__init__(message)
+
+
+ASSESSMENT_REQUIRED_FOR_PUBLISH = (
+    "An assessment is required before this placement drive can be published."
+)
 
 
 class DriveService:
@@ -70,6 +77,12 @@ class DriveService:
 
         company = await self._get_or_create_company(payload)
 
+        # Store canonical department names so a drive created with "CS" and a
+        # student profile saying "Computer Science" describe the same
+        # department at eligibility-check time (and in every later read).
+        eligibility = payload.eligibility.model_dump()
+        eligibility["departments"] = normalize_departments(eligibility.get("departments"))
+
         drive = await self.drives.create(
             {
                 "company_id": company.id,
@@ -81,7 +94,7 @@ class DriveService:
                 "experience_required_years": payload.experience_required_years,
                 "package": payload.package,
                 "location": payload.location,
-                "eligibility": payload.eligibility.model_dump(),
+                "eligibility": eligibility,
                 "deadline": payload.deadline,
                 "selection_process": payload.selection_process,
                 "status": DriveStatus.OPEN.value,
@@ -110,6 +123,25 @@ class DriveService:
             raise DriveError("You do not have permission to modify this drive.", 403)
         return drive
 
+    async def _require_drive_for_actor(
+        self, actor_user_id: str, drive_id: str, actor_role: str
+    ) -> PlacementDriveInDB:
+        """Resolve a drive the actor may manage.
+
+        Admins may manage any drive; a TPO may only manage drives they own
+        (same rule as every other drive-management endpoint). The role is
+        passed explicitly by the router so this never trusts a client field.
+        """
+        drive = await self.drives.get_by_id(drive_id)
+        if not drive:
+            raise DriveError("Drive not found.", 404)
+        if actor_role == "admin":
+            return drive
+        tpo = await self.tpos.get_by_user_id(actor_user_id)
+        if not tpo or drive.created_by != tpo.id:
+            raise DriveError("You do not have permission to modify this drive.", 403)
+        return drive
+
     async def update_drive(
         self, tpo_user_id: str, drive_id: str, payload: DriveUpdateRequest
     ) -> PlacementDriveInDB:
@@ -117,7 +149,9 @@ class DriveService:
 
         update_data = payload.model_dump(exclude_unset=True, exclude_none=True)
         if "eligibility" in update_data and payload.eligibility:
-            update_data["eligibility"] = payload.eligibility.model_dump()
+            eligibility = payload.eligibility.model_dump()
+            eligibility["departments"] = normalize_departments(eligibility.get("departments"))
+            update_data["eligibility"] = eligibility
         if "status" in update_data and payload.status:
             update_data["status"] = payload.status.value
 
@@ -132,6 +166,25 @@ class DriveService:
                 )
             else:
                 update_data["required_assessment_id"] = None
+
+        # A drive cannot be published/activated without an assessment, and an
+        # open drive cannot have its assessment removed. The message is fixed
+        # because the UI surfaces it verbatim.
+        resulting_assessment = update_data.get(
+            "required_assessment_id", drive.required_assessment_id
+        )
+        reopening = (
+            "status" in update_data
+            and update_data["status"] == DriveStatus.OPEN.value
+            and drive.status != DriveStatus.OPEN
+        )
+        clearing_assessment = (
+            "required_assessment_id" in update_data
+            and not update_data["required_assessment_id"]
+            and drive.status == DriveStatus.OPEN
+        )
+        if (reopening or clearing_assessment) and not resulting_assessment:
+            raise DriveError(ASSESSMENT_REQUIRED_FOR_PUBLISH, 400)
 
         # The cached jd_embedding (Phase 9) is only valid for the exact text
         # it was computed from — if anything that feeds that text changes,
@@ -167,7 +220,7 @@ class DriveService:
         elig = drive.eligibility
         if elig.min_cgpa is not None and (student.cgpa is None or student.cgpa < elig.min_cgpa):
             reasons.append(f"Minimum CGPA required: {elig.min_cgpa} (yours: {student.cgpa or 'N/A'})")
-        if elig.departments and student.department not in elig.departments:
+        if not department_matches(student.department, elig.departments):
             reasons.append(f"Open only to: {', '.join(elig.departments)} (yours: {student.department or 'N/A'})")
         if elig.batch_years and student.batch_year not in elig.batch_years:
             reasons.append(f"Open only to batch years: {', '.join(map(str, elig.batch_years))} (yours: {student.batch_year or 'N/A'})")
@@ -228,31 +281,40 @@ class DriveService:
 
     async def update_application_status(
         self,
-        tpo_user_id: str,
+        actor_user_id: str,
         drive_id: str,
         application_id: str,
         new_status: str,
         rejection_reasons: list[str] | None = None,
         rejection_note: str | None = None,
+        *,
+        actor_role: str = "tpo",
+        ip_address: str | None = None,
     ) -> ApplicationInDB:
-        await self._require_owned_drive(tpo_user_id, drive_id)
+        """Set an application's status to applied / shortlisted / rejected.
+
+        Admins may act on any drive; TPOs only on their own. All three
+        statuses are freely interchangeable because the placement team may
+        reverse a decision (for example, un-shortlist a candidate). Legacy
+        ``selected`` records remain valid documents but cannot be produced by
+        this endpoint: the current workflow has no Selected stage.
+        """
+        drive = await self._require_drive_for_actor(actor_user_id, drive_id, actor_role)
 
         application = await self.applications.get_by_id(application_id)
         if not application or application.drive_id != drive_id:
             raise DriveError("Application not found for this drive.", 404)
 
+        managed_statuses = MANAGED_APPLICATION_STATUSES
         try:
             target_status = ApplicationStatus(new_status)
             current_status = ApplicationStatus(application.status)
         except ValueError:
             raise DriveError(f"Invalid status: {new_status}", 400)
 
-        # Status transition validation
-        valid_next = VALID_STATUS_TRANSITIONS.get(current_status, set())
-        if target_status != current_status and target_status not in valid_next:
+        if target_status not in managed_statuses:
             raise DriveError(
-                f"Invalid status transition from '{current_status.value}' to '{target_status.value}'. "
-                f"Allowed transitions: {[s.value for s in valid_next]}",
+                "Status must be one of: applied, shortlisted, rejected.",
                 400,
             )
 
@@ -264,11 +326,30 @@ class DriveService:
         if target_status == ApplicationStatus.REJECTED:
             update_fields["rejection_reasons"] = rejection_reasons or []
             update_fields["rejection_note"] = rejection_note
-        elif target_status in (ApplicationStatus.SHORTLISTED, ApplicationStatus.SELECTED):
+        else:
+            # Moving back to applied/shortlisted clears an earlier rejection.
             update_fields["rejection_reasons"] = []
             update_fields["rejection_note"] = None
 
         updated = await self.applications.update_by_id(application_id, update_fields)
         if not updated:
             raise DriveError("Application not found for this drive.", 404)
+
+        await log_activity(
+            self.db,
+            actor_user_id,
+            action="application.status_changed",
+            entity="application",
+            entity_id=application_id,
+            metadata={
+                "drive_id": drive_id,
+                "student_id": application.student_id,
+                "previous_status": current_status.value,
+                "new_status": target_status.value,
+                "actor_role": actor_role,
+                "rejection_reasons": update_fields["rejection_reasons"],
+                "rejection_note": update_fields["rejection_note"],
+            },
+            ip_address=ip_address,
+        )
         return updated

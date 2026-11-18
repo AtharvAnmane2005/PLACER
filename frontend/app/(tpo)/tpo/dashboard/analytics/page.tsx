@@ -1,10 +1,10 @@
 "use client";
 
-import { AlertCircle, BarChart3, Briefcase, Percent, Users } from "lucide-react";
+import { AlertCircle, BarChart3, Briefcase, CheckCircle2, Users } from "lucide-react";
 
 import { DriveBreakdown } from "@/components/analytics/drive-breakdown";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/empty-state";
 import { StatCard } from "@/components/shared/stat-card";
@@ -48,13 +48,17 @@ export default function TpoAnalyticsPage() {
 
       <div className="grid gap-4 sm:grid-cols-3">
         <StatCard label="Total drives" value={data.total_drives} icon={Briefcase} />
+        <StatCard label="Open drives" value={data.open_drives} icon={CheckCircle2} />
         <StatCard label="Total applications" value={data.total_applications} icon={Users} />
-        <StatCard label="Selection rate" value={`${data.selection_rate_pct}%`} icon={Percent} />
       </div>
 
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Application funnel</CardTitle>
+          <CardDescription>
+            Application counts by status across your drives. Colours are shared with the platform
+            analytics view.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {data.total_applications === 0 ? (

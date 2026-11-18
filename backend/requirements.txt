@@ -27,6 +27,9 @@ python-dotenv
 tenacity
 cloudinary
 
+# --- Question bank Excel/CSV import & export ---
+openpyxl
+
 # --- Testing ---
 pytest
 pytest-asyncio

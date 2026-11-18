@@ -52,6 +52,43 @@ class MatchingModelsUnavailable(Exception):
     than the app crashing outright."""
 
 
+def _verify_checkpoint_covers_model(artifact_path: Path, model: torch.nn.Module) -> None:
+    """Fail loudly if the checkpoint's tensors don't match the loaded model.
+
+    ``AutoModel.from_pretrained`` does NOT raise when the weight file belongs
+    to a different architecture — it emits a warning and leaves the model
+    randomly initialised. That happened here once: the cross-encoder's
+    RoBERTa checkpoint had been copied into ``bi_encoder/``, so every
+    "embedding" was noise while the API still answered 200 OK.
+
+    A checkpoint that does not supply exactly the model's parameters is not a
+    usable model, so this raises instead of silently degrading. Extra tensors
+    are rejected too: they mean the file is for a different task/model.
+    """
+    weights = artifact_path / "model.safetensors"
+    if not weights.is_file():
+        return  # pytorch_model.bin path — from_pretrained already validated it
+
+    from safetensors import safe_open
+
+    with safe_open(str(weights), framework="pt") as handle:
+        checkpoint_keys = set(handle.keys())
+    model_keys = set(model.state_dict().keys())
+
+    missing = sorted(model_keys - checkpoint_keys)
+    unexpected = sorted(checkpoint_keys - model_keys)
+    if not missing and not unexpected:
+        return
+
+    raise MatchingModelsUnavailable(
+        f"Checkpoint {weights} does not match the model it is paired with. "
+        f"{len(missing)} expected tensor(s) missing, {len(unexpected)} unexpected "
+        f"tensor(s) present. Loading this would silently produce a randomly "
+        f"initialised encoder. Missing sample: {missing[:3]}; "
+        f"unexpected sample: {unexpected[:3]}."
+    )
+
+
 class MatchingEngine:
     """
     Lazily-loaded singleton — the three models total ~570MB and take a real
@@ -73,15 +110,30 @@ class MatchingEngine:
                 "hosting is expected for real deployments)."
             )
 
+        # A folder existing is not enough: both encoders need their actual
+        # weight file. Without this check AutoModel.from_pretrained silently
+        # builds a randomly initialised model (or raises a raw OSError), which
+        # would either produce meaningless scores or a 500 instead of the
+        # documented graceful 503. Never substitute untrained weights.
+        for artifact_path in (_BI_ENCODER_PATH, _CROSS_ENCODER_PATH):
+            weights_present = (artifact_path / "model.safetensors").is_file() or (artifact_path / "pytorch_model.bin").is_file()
+            if not weights_present:
+                raise MatchingModelsUnavailable(
+                    f"Missing trained weights in {artifact_path}: expected model.safetensors or pytorch_model.bin. "
+                    "Matching is unavailable until the supplied weights are placed there."
+                )
+
         logger.info("Loading matching models onto %s ...", _DEVICE)
 
         self.bi_tokenizer = AutoTokenizer.from_pretrained(str(_BI_ENCODER_PATH))
         self.bi_model = AutoModel.from_pretrained(str(_BI_ENCODER_PATH)).to(_DEVICE).eval()
+        _verify_checkpoint_covers_model(_BI_ENCODER_PATH, self.bi_model)
 
         self.cross_tokenizer = AutoTokenizer.from_pretrained(str(_CROSS_ENCODER_PATH))
         self.cross_model = (
             AutoModelForSequenceClassification.from_pretrained(str(_CROSS_ENCODER_PATH)).to(_DEVICE).eval()
         )
+        _verify_checkpoint_covers_model(_CROSS_ENCODER_PATH, self.cross_model)
 
         with open(_CALIBRATOR_PATH, "rb") as f:
             self.calibrator = pickle.load(f)

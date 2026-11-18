@@ -39,6 +39,7 @@ export interface CompareOption {
 }
 
 interface CompareFilters {
+  source: string | null;
   year_from: number | null;
   year_to: number | null;
   company: string | null;
@@ -62,7 +63,7 @@ function EntitySummaryCard({
     )[0];
 
   return (
-    <div className="rounded-md border border-border p-4">
+    <div className="min-w-0 rounded-md border border-border p-4">
       <div className="mb-2 flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate font-medium">{entity.entity_label}</p>
@@ -98,7 +99,7 @@ function EntitySummaryCard({
         )}
       </p>
       <p className="text-xs text-muted-foreground">
-        {dimension === "company" ? "Strongest company-level growth" : "Strongest family-level growth"}:{" "}
+        {dimension === "company" ? "Strongest company-level growth" : "Strongest domain-level growth"}:{" "}
         {strongestGrowth && strongestGrowth.yoy_growth_pct != null ? (
           <span className="font-medium text-foreground">
             {strongestGrowth.name} ({formatSignedGrowth(strongestGrowth.yoy_growth_pct)})
@@ -130,7 +131,7 @@ function DemandMatrixSection({
   const [showAll, setShowAll] = useState(false);
   const matrix = useMemo(() => buildComparisonMatrix(entities), [entities]);
   const visible = showAll ? matrix : matrix.slice(0, MATRIX_PREVIEW_ROWS);
-  const entityLabel = dimension === "company" ? "company" : "family";
+  const entityLabel = dimension === "company" ? "company" : "domain";
 
   return (
     <div className="space-y-2">
@@ -198,7 +199,7 @@ function SharedSkillsSection({
   dimension: ComparisonDimension;
 }) {
   const shared = useMemo(() => buildSharedSkills(entities), [entities]);
-  const entityLabel = dimension === "company" ? "companies" : "job families";
+  const entityLabel = dimension === "company" ? "companies" : "domains";
   if (shared.length === 0) {
     return (
       <div className="space-y-2">
@@ -262,11 +263,11 @@ function UniqueSkillsSection({
     () => buildUniqueSkills(entities, overallPostingCount),
     [entities, overallPostingCount]
   );
-  const entityLabel = dimension === "company" ? "company" : "family";
+  const entityLabel = dimension === "company" ? "company" : "domain";
   if (groups.length === 0) {
     return (
       <div className="space-y-2">
-        <h4 className="text-sm font-semibold">{dimension === "company" ? "Company" : "Family"}-specific skills</h4>
+        <h4 className="text-sm font-semibold">{dimension === "company" ? "Company" : "Domain"}-specific skills</h4>
         <p className="text-sm text-muted-foreground">
           Every skill required by one selected {entityLabel} is also required by another
           selected {entityLabel}.
@@ -278,7 +279,7 @@ function UniqueSkillsSection({
     <div className="space-y-3">
       <div className="space-y-1">
         <h4 className="text-sm font-semibold">
-          {dimension === "company" ? "Company" : "Family"}-specific skills
+          {dimension === "company" ? "Company" : "Domain"}-specific skills
         </h4>
       </div>
       <div className="grid gap-3 md:grid-cols-2">
@@ -312,7 +313,7 @@ function UniqueSkillsSection({
 }
 
 /**
- * Phase 5 entity-comparison panel: pick several companies (or job families),
+ * Phase 5 entity-comparison panel: pick several companies (or domains),
  * then compare their FULL skill requirements — demand matrix, shared skills,
  * and skills unique to one entity — plus per-entity summaries (postings,
  * industry, technical/soft mix, year-wise counts, strongest growth).
@@ -359,7 +360,7 @@ export function EntityComparePanel({
   const labelFor = (key: string) =>
     options.find((option) => option.key === key)?.label ?? key;
   const addable = options.filter((option) => !draftKeys.includes(option.key));
-  const entityLabel = dimension === "company" ? "company" : "job family";
+  const entityLabel = dimension === "company" ? "company" : "domain";
 
   const data = comparison.data;
   const entities = data?.entities ?? [];
@@ -449,7 +450,7 @@ export function EntityComparePanel({
           )}
           {draftKeys.length > 0 && draftKeys.length < minSelection && (
             <p className="text-xs text-muted-foreground">
-              Select at least {minSelection} {dimension === "company" ? "companies" : "job families"} to{" "}
+              Select at least {minSelection} {dimension === "company" ? "companies" : "domains"} to{" "}
               {dimension === "company" ? "compare" : "proceed"}.
             </p>
           )}

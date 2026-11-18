@@ -19,30 +19,39 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { MarkdownText } from "@/components/shared/markdown-text";
 import { StatCard } from "@/components/shared/stat-card";
 import { useStudentInsights } from "@/hooks/use-assessments";
+import { formatCount, formatDate, formatPercent } from "@/lib/format";
+import {
+  SEVERITY_BADGE_CLASS,
+  SEVERITY_COLOR,
+  severityBandFromStatus,
+} from "@/lib/severity";
 import type { SkillFocus } from "@/types/assessment";
 
-/** Maps the backend's severity enum to a badge variant + label. */
-const SEVERITY: Record<SkillFocus["severity"], { label: string; variant: "destructive" | "warning" | "secondary" | "outline" }> = {
-  critical: { label: "Critical", variant: "destructive" },
-  weak: { label: "Needs work", variant: "warning" },
-  watch: { label: "Watch", variant: "secondary" },
-  ok: { label: "On track", variant: "outline" },
+/**
+ * Human labels for the backend's four severity values. The colours are
+ * collapsed into three bands by `severityBandFromStatus`: critical is red,
+ * weak/watch are the amber "moderate" band, and ok is green.
+ */
+const SEVERITY_LABEL: Record<SkillFocus["severity"], string> = {
+  critical: "Critical",
+  weak: "Moderate",
+  watch: "Moderate",
+  ok: "Good",
 };
 
 function TrendIcon({ trend }: { trend: SkillFocus["trend"] }) {
-  if (trend === "improving") return <ArrowUpRight className="h-3.5 w-3.5 text-success" />;
-  if (trend === "declining") return <ArrowDownRight className="h-3.5 w-3.5 text-destructive" />;
-  if (trend === "steady") return <Minus className="h-3.5 w-3.5 text-muted-foreground" />;
+  if (trend === "improving")
+    return <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-success" />;
+  if (trend === "declining")
+    return <ArrowDownRight className="h-3.5 w-3.5 shrink-0 text-destructive" />;
+  if (trend === "steady")
+    return <Minus className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />;
   // "unknown" means there's not enough history yet to claim a direction —
   // deliberately not rendered as "steady", which would overstate what we know.
-  return <Minus className="h-3.5 w-3.5 text-muted-foreground/50" />;
-}
-
-function formatDate(iso: string | null): string {
-  if (!iso) return "—";
-  return new Date(iso).toLocaleDateString(undefined, { dateStyle: "medium" });
+  return <Minus className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />;
 }
 
 export default function StudentInsightsPage() {
@@ -52,7 +61,7 @@ export default function StudentInsightsPage() {
     return (
       <div className="space-y-6">
         <Skeleton className="h-10 w-64" />
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {Array.from({ length: 4 }).map((_, i) => (
             <Skeleton key={i} className="h-24 w-full" />
           ))}
@@ -112,20 +121,20 @@ export default function StudentInsightsPage() {
       <div>
         <h1 className="font-display text-2xl font-semibold">Insights</h1>
         <p className="text-sm text-muted-foreground">
-          Based on {data.total_attempts} completed assessment{data.total_attempts === 1 ? "" : "s"} — where to
-          focus, and what to revise.
+          Based on {formatCount(data.total_attempts)} completed assessment
+          {data.total_attempts === 1 ? "" : "s"} — where to focus, and what to revise.
         </p>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           label="Overall accuracy"
-          value={`${Math.round(data.overall_accuracy_pct)}%`}
+          value={formatPercent(data.overall_accuracy_pct, 1)}
           icon={Target}
         />
         <StatCard
           label="Avg. mastery"
-          value={data.average_mastery_pct !== null ? `${Math.round(data.average_mastery_pct)}%` : "—"}
+          value={formatPercent(data.average_mastery_pct, 1)}
           icon={Lightbulb}
         />
         <StatCard
@@ -151,12 +160,12 @@ export default function StudentInsightsPage() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="whitespace-pre-line text-sm leading-relaxed">{data.narrative}</p>
+            <MarkdownText content={data.narrative} />
           </CardContent>
         </Card>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Focus areas</CardTitle>
@@ -165,32 +174,40 @@ export default function StudentInsightsPage() {
           <CardContent>
             {data.focus_areas.length === 0 ? (
               <p className="text-sm text-muted-foreground">
-                Nothing flagged right now — every tracked skill is at or above the threshold. Keep
-                the streak going.
+                Nothing flagged right now — every tracked skill with enough evidence is at or above
+                the review threshold.
               </p>
             ) : (
               <div className="space-y-4">
-                {data.focus_areas.map((f) => (
-                  <div key={f.skill} className="space-y-1.5">
-                    <div className="flex items-center gap-2">
-                      <Badge variant={SEVERITY[f.severity].variant}>{SEVERITY[f.severity].label}</Badge>
-                      <span className="text-sm font-medium">{f.skill}</span>
-                      <TrendIcon trend={f.trend} />
-                      <span className="ml-auto text-sm text-muted-foreground">
-                        {Math.round(f.mastery_pct)}% mastery
-                      </span>
+                {data.focus_areas.map((f) => {
+                  const band = severityBandFromStatus(f.severity);
+                  return (
+                    <div key={f.skill} className="space-y-1.5">
+                      <div className="flex items-center gap-2">
+                        <Badge
+                          variant="outline"
+                          className={`shrink-0 ${SEVERITY_BADGE_CLASS[band]}`}
+                        >
+                          {SEVERITY_LABEL[f.severity]}
+                        </Badge>
+                        <span className="min-w-0 truncate text-sm font-medium">{f.skill}</span>
+                        <TrendIcon trend={f.trend} />
+                        <span className="ml-auto shrink-0 text-sm text-muted-foreground">
+                          {formatPercent(f.mastery_pct, 1)} mastery
+                        </span>
+                      </div>
+                      <Progress
+                        value={f.mastery_pct}
+                        indicatorStyle={{ backgroundColor: SEVERITY_COLOR[band] }}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        {formatCount(f.wrong_count)} missed across {formatCount(f.attempts_touched)} attempt
+                        {f.attempts_touched === 1 ? "" : "s"}
+                        {f.last_missed_at && ` · last ${formatDate(f.last_missed_at)}`}
+                      </p>
                     </div>
-                    <Progress
-                      value={f.mastery_pct}
-                      className={f.severity === "critical" ? "[&>div]:bg-destructive" : undefined}
-                    />
-                    <p className="text-xs text-muted-foreground">
-                      {f.wrong_count} missed across {f.attempts_touched} attempt
-                      {f.attempts_touched === 1 ? "" : "s"}
-                      {f.last_missed_at && ` · last ${formatDate(f.last_missed_at)}`}
-                    </p>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </CardContent>
@@ -215,9 +232,13 @@ export default function StudentInsightsPage() {
                     <Badge variant="outline" className="w-28 shrink-0 justify-center truncate">
                       {s.skill}
                     </Badge>
-                    <Progress value={s.mastery_pct} className="flex-1" />
+                    <Progress
+                      value={s.mastery_pct}
+                      className="min-w-0 flex-1"
+                      indicatorStyle={{ backgroundColor: SEVERITY_COLOR.good }}
+                    />
                     <span className="w-10 shrink-0 text-right text-sm text-muted-foreground">
-                      {Math.round(s.mastery_pct)}%
+                      {formatPercent(s.mastery_pct, 1)}
                     </span>
                   </div>
                 ))}

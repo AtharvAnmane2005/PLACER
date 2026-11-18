@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { Award, BarChart3, LayoutDashboard, ListChecks } from "lucide-react";
+import { Award, Briefcase, LayoutDashboard, ListChecks } from "lucide-react";
 import { useEffect } from "react";
 
 import { DashboardShell, initialsFrom, type DashboardNavItem } from "@/components/shared/dashboard-shell";
@@ -11,7 +11,7 @@ const NAV_ITEMS: DashboardNavItem[] = [
   { href: "/admin/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
   { href: "/admin/dashboard/questions", label: "Question bank", icon: ListChecks },
   { href: "/admin/dashboard/assessments", label: "Assessments", icon: Award },
-  { href: "/admin/dashboard/analytics", label: "Analytics", icon: BarChart3 },
+  { href: "/admin/dashboard/drives", label: "Applications", icon: Briefcase },
 ];
 
 /**

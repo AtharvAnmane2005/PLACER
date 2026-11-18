@@ -1,0 +1,1244 @@
+%% ===========================================================================
+%% PLACER — AI-Powered Campus Recruitment & Placement Assistance System
+%% System architecture, entity-relationship model, database schema,
+%% complete data-flow diagram (15 workflows), role workflows and AI model
+%% architecture.
+%%
+%% Source of truth: the implementation under PLACER/backend and PLACER/frontend.
+%% Every node, table, field, endpoint and collection name below exists in the
+%% codebase. Planned or unimplemented elements are marked "PLANNED" or
+%% "NOT IMPLEMENTED" and never drawn as if they existed.
+%%
+%% This file holds eight independent diagram groups (A, B, C, D, E1, E2, E3,
+%% F). Each group is a complete, standalone Mermaid definition: render a
+%% single group by copying its block into any Mermaid renderer (mermaid.live,
+%% VS Code Mermaid extension, mermaid-cli). A .mmd file itself is not
+%% auto-rendered by GitHub, and the groups are NOT meant to be rendered as one
+%% combined document (they use different diagram types). The Markdown
+%% companions cross-reference the groups but do not duplicate the definitions.
+%%
+%% Companion documents:
+%%   docs/PLACER_MATHEMATICAL_FORMULAS_AND_ALGORITHMS.md
+%%   docs/PLACER_SYSTEM_DESIGN_AND_DATA_FLOW.md
+%% ===========================================================================
+
+
+%% ===========================================================================
+%% GROUP A — FULL SYSTEM ARCHITECTURE
+%% Layers: client -> edge -> API -> domain services -> data / ML / external.
+%% ===========================================================================
+
+flowchart TB
+  subgraph CLIENT["Client tier — Next.js 15.5.18 App Router, React 19, port 3000"]
+    direction TB
+    LANDING["Public landing<br/>app/page.tsx"]
+    AUTHUI["Auth UI<br/>app/(auth)/login · /register"]
+
+    subgraph STU["Student interface — app/(student)"]
+      direction TB
+      S_DASH["/dashboard<br/>KPIs · status donut · radar"]
+      S_DRIVES["/dashboard/drives<br/>/dashboard/drives/[id]"]
+      S_APPS["/dashboard/applications"]
+      S_RESUME["/dashboard/resume"]
+      S_EXAM["/dashboard/assessments<br/>/take/[attemptId] · /results/[attemptId]"]
+      S_INSIGHTS["/dashboard/insights"]
+      S_PROFILE["/dashboard/profile"]
+    end
+
+    subgraph TPOU["TPO interface — app/(tpo)"]
+      direction TB
+      T_DASH["/tpo/dashboard"]
+      T_DRIVES["/tpo/dashboard/drives<br/>/new · /[id] · /[id]/applicants"]
+      T_ANALYTICS["/tpo/dashboard/analytics"]
+      T_TRENDING["/tpo/dashboard/analytics/trending"]
+      T_GAPS["/tpo/dashboard/analytics/skill-gaps"]
+    end
+
+    subgraph ADMU["Admin interface — app/(admin)"]
+      direction TB
+      A_DASH["/admin/dashboard"]
+      A_ANALYTICS["/admin/dashboard/analytics"]
+      A_DRIVES["/admin/dashboard/drives"]
+      A_QUESTIONS["/admin/dashboard/questions<br/>/new"]
+      A_ASSESS["/admin/dashboard/assessments<br/>/new"]
+      A_TEMPLATES["/admin/dashboard/templates"]
+      A_PLACEMENT["/admin/dashboard/placement"]
+    end
+
+    HOOKS["TanStack Query hooks<br/>frontend/hooks/*.ts"]
+    APICLIENT["apiClient — axios<br/>baseURL /api/backend<br/>Bearer access token<br/>single-flight 401 refresh"]
+    CHARTS["Shared chart + UI layer<br/>Recharts 2.15.4 · chart-theme.ts<br/>MarkdownText · StatusBreakdownChart"]
+
+    STU --> HOOKS
+    TPOU --> HOOKS
+    ADMU --> HOOKS
+    HOOKS --> APICLIENT
+    STU --> CHARTS
+    TPOU --> CHARTS
+    ADMU --> CHARTS
+  end
+
+  subgraph EDGE["Edge tier — Next.js server"]
+    direction TB
+    MW["middleware.ts<br/>reads placer_role cookie<br/>role-based redirect only"]
+    REWRITE["next.config.mjs rewrites<br/>/api/backend/:path* →<br/>NEXT_PUBLIC_API_URL/api/v1/:path*"]
+  end
+
+  subgraph API["API tier — FastAPI (uvicorn, port 8000)"]
+    direction TB
+    MWARE["Middleware<br/>RequestIdMiddleware (outermost)<br/>CORSMiddleware · slowapi limiter"]
+    DEPS["Dependencies — core/deps.py<br/>get_current_user (DB round-trip)<br/>require_role('student' | 'tpo' | 'admin')"]
+    subgraph ROUTERS["Routers — /api/v1"]
+      direction TB
+      R_AUTH["auth"]
+      R_STU["students · resumes"]
+      R_DRIVE["drives · applications"]
+      R_QUES["questions"]
+      R_ASSESS["assessments · gap_analysis"]
+      R_ANALYTICS["analytics · market_analytics"]
+      R_MATCH["matching · jd_explanation"]
+      R_ADMIN["insights · knowledge_admin<br/>observability · health"]
+    end
+    ERR["Error contract<br/>HTTPException · domain errors<br/>global 500 handler (no stack traces)"]
+    MWARE --> DEPS
+    DEPS --> ROUTERS
+    ROUTERS --> ERR
+  end
+
+  subgraph SVC["Domain service layer — backend/app/services"]
+    direction TB
+    SV_AUTH["auth_service<br/>GoogleAuthService"]
+    SV_PROFILE["student_profile_service<br/>profile_autofill_service"]
+    SV_RESUME["resume_service<br/>resume_parsing_service"]
+    SV_DRIVE["drive_service<br/>screening_service"]
+    SV_ASSESS["assessment_service<br/>placement_assessment_service<br/>assessment_selection_service<br/>code_execution_service"]
+    SV_KT["knowledge_tracing_service"]
+    SV_ANALYTICS["analytics_service"]
+    SV_MARKET["market_analytics_service<br/>market_import_service · market_sources"]
+    SV_GAP["skill_gap_service<br/>gap_analysis_service<br/>student_insights_service"]
+    SV_MATCH["matching_service<br/>application_explanation_service<br/>jd_explanation_service"]
+    SV_QUEST["question_service<br/>question_import_service<br/>template_service"]
+    SV_STORAGE["storage_service"]
+  end
+
+  subgraph REPO["Repository layer — backend/app/repositories"]
+    direction TB
+    BASE["BaseRepository<br/>create · get_by_id · find_one<br/>find_many · count · update_by_id · delete_by_id"]
+    SPECIFIC["User · Student · TPO · Admin · Token<br/>Resume · Company · Drive · Application<br/>Question · Assessment · Attempt · KnowledgeState<br/>Template · ActivityLog · JobMarketPosting<br/>MarketSkillCatalog · MarketImportRun<br/>UnmappedSkill"]
+  end
+
+  subgraph ML["AI / ML layer — backend/app/ml"]
+    direction TB
+    ML_PARSE["Parsing<br/>PyMuPDF text extraction<br/>PaddleOCR fallback<br/>section + contact parser"]
+    ML_LLM["LLM client<br/>primary / fallback providers<br/>ollama · nvidia_nim · openrouter<br/>retry + backoff · soft failure"]
+    ML_EMBED["Embedding client<br/>ollama or OpenAI-compatible<br/>nomic-embed-text / bge-small / gemini"]
+    ML_MATCH["Matching<br/>bi-encoder all-MiniLM-L6-v2<br/>cross-encoder stsb-roberta-base<br/>Platt calibrator"]
+    ML_RAG["RAG knowledge store<br/>chunk 1200 / overlap 150<br/>MongoDB cosine, top_k 5"]
+  end
+
+  subgraph DATA["Data tier"]
+    direction TB
+    MONGO[("MongoDB 7 — placer_db<br/>24 collections")]
+    FILES[("Resume files<br/>local storage or Cloudinary<br/>local:// or https:// URLs")]
+    CACHE[("insights_narrative_cache<br/>knowledge_chunks<br/>trimmed / cosine-scanned")]
+  end
+
+  subgraph EXT["External providers"]
+    direction TB
+    GOOGLE["Google Identity Services<br/>ID-token verification"]
+    LLMAPI["LLM + embedding APIs<br/>NVIDIA NIM · OpenRouter<br/>Ollama (local)"]
+  end
+
+  APICLIENT -->|"HTTPS / JSON"| MW
+  MW --> REWRITE
+  REWRITE --> MWARE
+  ROUTERS --> SVC
+  SVC --> REPO
+  REPO --> MONGO
+  SVC --> ML
+  ML_PARSE --> FILES
+  ML_LLM --> LLMAPI
+  ML_EMBED --> LLMAPI
+  ML_RAG --> MONGO
+  SV_GAP --> CACHE
+  SV_AUTH --> GOOGLE
+  MONGO -.->|"ensure_indexes on startup"| API
+
+
+%% ===========================================================================
+%% GROUP B — ENTITY-RELATIONSHIP DIAGRAM
+%% Cardinalities and foreign keys exactly as stored. Profile references are
+%% students._id (not users._id) and placement_drives.created_by is tpos._id.
+%% ===========================================================================
+
+erDiagram
+  USERS ||--o| STUDENTS : "has profile"
+  USERS ||--o| TPOS : "has profile"
+  USERS ||--o| ADMINS : "has profile"
+  USERS ||--o{ REFRESH_TOKENS : "issues"
+  USERS ||--o{ PASSWORD_RESET_TOKENS : "requests"
+  USERS ||--o{ ACTIVITY_LOGS : "performs"
+  USERS ||--o{ QUESTIONS : "creates"
+  USERS ||--o{ ASSESSMENTS : "creates"
+  USERS ||--o{ ASSESSMENT_TEMPLATES : "creates"
+
+  STUDENTS ||--o{ RESUMES : "uploads"
+  STUDENTS ||--o| RESUMES : "active_resume_id"
+  STUDENTS ||--o{ APPLICATIONS : "submits"
+  STUDENTS ||--o{ ASSESSMENT_ATTEMPTS : "takes"
+  STUDENTS ||--o{ KNOWLEDGE_STATES : "mastery per skill"
+
+  COMPANIES ||--o{ PLACEMENT_DRIVES : "hosts"
+  TPOS ||--o{ PLACEMENT_DRIVES : "owns"
+
+  PLACEMENT_DRIVES ||--o{ APPLICATIONS : "receives"
+  PLACEMENT_DRIVES ||--o| ASSESSMENTS : "required_assessment_id"
+
+  RESUMES ||--o{ APPLICATIONS : "attached to"
+
+  ASSESSMENTS ||--o{ ASSESSMENT_ATTEMPTS : "generates"
+  APPLICATIONS ||--o| ASSESSMENT_ATTEMPTS : "assessment_attempt_id"
+
+  QUESTION_CATEGORIES ||--o{ QUESTIONS : "classifies"
+  QUESTION_CATEGORIES ||--o{ QUESTION_CATEGORIES : "parent of"
+  QUESTION_CATEGORIES }o--o{ ASSESSMENTS : "category_ids"
+  QUESTIONS }o--o{ ASSESSMENTS : "question_ids"
+
+  ASSESSMENT_TEMPLATES ||--o{ ASSESSMENTS : "template_id"
+
+  JOB_MARKET_POSTINGS }o--o{ MARKET_SKILL_CATALOG : "skill names"
+  MARKET_IMPORT_RUNS ||--o{ JOB_MARKET_POSTINGS : "imports by source"
+
+  USERS {
+    ObjectId _id PK
+    string email UK
+    string password_hash
+    string role
+    string auth_provider
+    string google_sub
+    boolean is_active
+    datetime created_at
+    datetime last_login
+    string data_origin
+    boolean is_synthetic
+  }
+
+  STUDENTS {
+    ObjectId _id PK
+    string user_id FK,UK
+    string name
+    string department
+    int batch_year
+    float cgpa
+    string phone
+    string[] skills
+    string active_resume_id FK
+    float profile_completeness_pct
+  }
+
+  TPOS {
+    ObjectId _id PK
+    string user_id FK,UK
+    string name
+    string[] department_scope
+  }
+
+  ADMINS {
+    ObjectId _id PK
+    string user_id FK,UK
+    string name
+  }
+
+  REFRESH_TOKENS {
+    ObjectId _id PK
+    string user_id FK
+    string token_hash UK
+    datetime expires_at
+    boolean revoked
+  }
+
+  PASSWORD_RESET_TOKENS {
+    ObjectId _id PK
+    string user_id FK
+    string token_hash
+    datetime expires_at
+    boolean used
+  }
+
+  RESUMES {
+    ObjectId _id PK
+    string student_id FK
+    int version
+    string file_url
+    string file_hash
+    string resume_text
+    string[] skill_set
+    float experience_years
+    float[] resume_embedding
+    boolean is_active
+    object parsed
+  }
+
+  COMPANIES {
+    ObjectId _id PK
+    string name
+    string industry
+  }
+
+  PLACEMENT_DRIVES {
+    ObjectId _id PK
+    string company_id FK
+    string job_title
+    string jd_text
+    float[] jd_embedding
+    string[] required_skills
+    float experience_required_years
+    object eligibility
+    datetime deadline
+    string status
+    string created_by FK
+    string required_assessment_id FK
+    float assessment_min_score_pct
+    datetime assessment_deadline
+  }
+
+  APPLICATIONS {
+    ObjectId _id PK
+    string drive_id FK
+    string student_id FK
+    string resume_id FK
+    string status
+    boolean eligibility_passed
+    float final_score
+    float semantic_score
+    float skills_score
+    float experience_score
+    string[] matched_skills
+    string[] missing_skills
+    string assessment_attempt_id FK
+    float assessment_score_pct
+    string assessment_status
+    string[] rejection_reasons
+    datetime applied_at
+  }
+
+  QUESTION_CATEGORIES {
+    ObjectId _id PK
+    string name
+    string parent_category_id FK
+  }
+
+  QUESTIONS {
+    ObjectId _id PK
+    string category_id FK
+    string[] skill_tags
+    string difficulty
+    string type
+    string text
+    string[] options
+    string correct_answer
+    string language
+    object[] test_cases
+    int marks
+    string status
+    string created_by FK
+    string topic
+    string skill
+  }
+
+  ASSESSMENTS {
+    ObjectId _id PK
+    string title
+    string[] category_ids
+    int question_pool_size
+    int time_limit_sec
+    string type
+    string drive_id FK
+    string created_by FK
+    string format
+    string status
+    string[] question_ids
+    object[] sections
+    int total_marks
+    int passing_marks
+    float negative_marks
+    string template_id FK
+  }
+
+  ASSESSMENT_ATTEMPTS {
+    ObjectId _id PK
+    string assessment_id FK
+    string student_id FK
+    string session_token
+    string[] asked_question_ids
+    string current_question_id
+    string current_difficulty
+    object[] answers
+    object[] violations
+    string status
+    datetime started_at
+    datetime submitted_at
+    string fingerprint_hash
+  }
+
+  KNOWLEDGE_STATES {
+    ObjectId _id PK
+    string student_id FK
+    string skill_tag UK
+    float mastery_pct
+    float confidence
+    int attempts_count
+    datetime last_updated
+    object[] history
+  }
+
+  ASSESSMENT_TEMPLATES {
+    ObjectId _id PK
+    string name
+    string[] category_ids
+    object[] sections
+    object difficulty_distribution
+    int total_questions
+    int total_marks
+    int time_limit_sec
+    string status
+    string format
+    string preset_key
+    string created_by FK
+  }
+
+  ACTIVITY_LOGS {
+    ObjectId _id PK
+    string user_id FK
+    string action
+    string entity
+    string entity_id
+    object metadata
+    string ip_address
+    datetime timestamp
+  }
+
+  JOB_MARKET_POSTINGS {
+    ObjectId _id PK
+    string external_id UK
+    string dataset_version
+    string source
+    string company_slug
+    string job_title
+    string job_family
+    string[] technical_skills
+    string[] soft_skills
+    string[] required_skills
+    float min_experience_years
+    datetime posted_at
+    int year
+    int quarter
+    int month
+    boolean is_active
+  }
+
+  MARKET_SKILL_CATALOG {
+    ObjectId _id PK
+    string name
+    string slug UK
+    string category
+    boolean is_technical
+    string[] aliases
+    string source
+  }
+
+  MARKET_IMPORT_RUNS {
+    ObjectId _id PK
+    string source
+    string dataset_version
+    string status
+    datetime started_at
+    datetime finished_at
+    int fetched
+    int imported
+    int duplicates
+    int skipped
+  }
+
+
+%% ===========================================================================
+%% GROUP C — DATABASE SCHEMA (physical)
+%% Key fields and every declared index. Collections without a Pydantic model
+%% are marked "raw document". `notifications` is index-only (no read/write
+%% code) and is therefore marked reserved.
+%% ===========================================================================
+
+classDiagram
+  direction LR
+
+  class users {
+    +ObjectId _id
+    +string email
+    +string password_hash
+    +string role
+    +string auth_provider
+    +string google_sub
+    +bool is_active
+    +datetime created_at
+    +datetime last_login
+    +string data_origin
+    +bool is_synthetic
+  }
+  note for users "UNIQUE(email)"
+
+  class students {
+    +ObjectId _id
+    +string user_id
+    +string name
+    +string department
+    +int batch_year
+    +float cgpa
+    +string[] skills
+    +string active_resume_id
+    +float profile_completeness_pct
+  }
+  note for students "UNIQUE(user_id); department canonicalised on write"
+
+  class tpos {
+    +ObjectId _id
+    +string user_id
+    +string name
+    +string[] department_scope
+  }
+  note for tpos "UNIQUE(user_id)"
+
+  class admins {
+    +ObjectId _id
+    +string user_id
+    +string name
+  }
+  note for admins "UNIQUE(user_id)"
+
+  class refresh_tokens {
+    +ObjectId _id
+    +string user_id
+    +string token_hash
+    +datetime expires_at
+    +bool revoked
+    +string device_info
+  }
+  note for refresh_tokens "UNIQUE(token_hash); TTL(expires_at, 0)"
+
+  class password_reset_tokens {
+    +ObjectId _id
+    +string user_id
+    +string token_hash
+    +datetime expires_at
+    +bool used
+  }
+  note for password_reset_tokens "NO index on token_hash"
+
+  class resumes {
+    +ObjectId _id
+    +string student_id
+    +int version
+    +string original_filename
+    +string file_url
+    +string file_hash
+    +int file_size_bytes
+    +object parsed
+    +string resume_text
+    +string[] skill_set
+    +float experience_years
+    +float[] resume_embedding
+    +bool is_active
+  }
+  note for resumes "IDX(student_id,is_active); IDX(student_id,version desc)"
+
+  class companies {
+    +ObjectId _id
+    +string name
+    +string description
+    +string website
+    +string industry
+  }
+  note for companies "IDX(name)"
+
+  class placement_drives {
+    +ObjectId _id
+    +string company_id
+    +string job_title
+    +string description
+    +string jd_text
+    +float[] jd_embedding
+    +string[] required_skills
+    +float experience_required_years
+    +object eligibility
+    +datetime deadline
+    +string[] selection_process
+    +string status
+    +string created_by
+    +string required_assessment_id
+    +float assessment_min_score_pct
+    +datetime assessment_deadline
+  }
+  note for placement_drives "IDX(status,deadline); IDX(created_by = tpos._id)"
+
+  class applications {
+    +ObjectId _id
+    +string drive_id
+    +string student_id
+    +string resume_id
+    +string status
+    +bool eligibility_passed
+    +string[] eligibility_reasons
+    +float final_score
+    +float semantic_score
+    +float skills_score
+    +float experience_score
+    +string[] matched_skills
+    +string[] missing_skills
+    +string assessment_attempt_id
+    +float assessment_score_pct
+    +string assessment_status
+    +string[] rejection_reasons
+    +string rejection_note
+    +datetime decision_at
+    +string evaluation_version
+    +datetime applied_at
+  }
+  note for applications "IDX(drive_id,final_score desc); UNIQUE(drive_id,student_id); IDX(student_id); SPARSE(assessment_attempt_id)"
+
+  class question_categories {
+    +ObjectId _id
+    +string name
+    +string parent_category_id
+  }
+  note for question_categories "no indexes"
+
+  class questions {
+    +ObjectId _id
+    +string category_id
+    +string[] skill_tags
+    +string difficulty
+    +string type
+    +string text
+    +string[] options
+    +string correct_answer
+    +string language
+    +string starter_code
+    +object[] test_cases
+    +int marks
+    +string[] company_tags
+    +string created_by
+    +string topic
+    +string skill
+    +string explanation
+    +string status
+  }
+  note for questions "IDX(category_id,difficulty); status; topic; skill; type; updated_at"
+
+  class assessments {
+    +ObjectId _id
+    +string title
+    +string[] category_ids
+    +int question_pool_size
+    +int time_limit_sec
+    +object anti_cheat_config
+    +string type
+    +string drive_id
+    +string created_by
+    +string format
+    +string status
+    +string[] question_ids
+    +object[] sections
+    +int total_marks
+    +int passing_marks
+    +float negative_marks
+    +bool allow_retake
+    +bool randomize_options
+    +string template_id
+  }
+  note for assessments "SPARSE(drive_id); IDX(format,status)"
+
+  class assessment_attempts {
+    +ObjectId _id
+    +string assessment_id
+    +string student_id
+    +string session_token
+    +string[] asked_question_ids
+    +string current_question_id
+    +string current_difficulty
+    +object[] answers
+    +object[] violations
+    +string status
+    +datetime started_at
+    +datetime submitted_at
+    +string ip_address
+    +string fingerprint_hash
+  }
+  note for assessment_attempts "IDX(student_id,started_at desc); assessment_id; (assessment_id,student_id); (assessment_id,student_id,status)"
+
+  class knowledge_states {
+    +ObjectId _id
+    +string student_id
+    +string skill_tag
+    +float mastery_pct
+    +float confidence
+    +int attempts_count
+    +datetime last_updated
+    +object[] history
+  }
+  note for knowledge_states "UNIQUE(student_id,skill_tag)"
+
+  class assessment_templates {
+    +ObjectId _id
+    +string name
+    +string description
+    +string[] category_ids
+    +object[] sections
+    +object difficulty_distribution
+    +string[] question_types
+    +int total_questions
+    +int total_marks
+    +int time_limit_sec
+    +int passing_marks
+    +float negative_marks
+    +string status
+    +string format
+    +string preset_key
+    +string created_by
+  }
+  note for assessment_templates "IDX(status); SPARSE(preset_key)"
+
+  class activity_logs {
+    +ObjectId _id
+    +string user_id
+    +string action
+    +string entity
+    +string entity_id
+    +object metadata
+    +string ip_address
+    +datetime timestamp
+  }
+  note for activity_logs "IDX(user_id,timestamp desc); IDX(entity,entity_id)"
+
+  class job_market_postings {
+    +ObjectId _id
+    +string external_id
+    +string dataset_version
+    +string source
+    +string company_name
+    +string company_slug
+    +string job_title
+    +string job_family
+    +string[] technical_skills
+    +string[] soft_skills
+    +string[] required_skills
+    +float min_experience_years
+    +datetime posted_at
+    +int year
+    +int quarter
+    +int month
+    +bool is_active
+  }
+  note for job_market_postings "UNIQUE(external_id); posted_at; year; company_slug; job_family; location; required_skills; technical_skills; soft_skills; source"
+
+  class market_skill_catalog {
+    +ObjectId _id
+    +string name
+    +string slug
+    +string category
+    +bool is_technical
+    +string[] aliases
+    +string source
+  }
+  note for market_skill_catalog "UNIQUE(slug); IDX(category)"
+
+  class market_import_runs {
+    +ObjectId _id
+    +string source
+    +string endpoint
+    +string dataset_version
+    +string status
+    +datetime started_at
+    +datetime finished_at
+    +int fetched
+    +int imported
+    +int duplicates
+    +int skipped
+    +string[] errors
+  }
+  note for market_import_runs "IDX(source,started_at desc)"
+
+  class unmapped_skill_suggestions {
+    +ObjectId _id
+    +string phrase
+    +string source_id
+    +string source_type
+    +bool reviewed
+    +bool added_to_vocabulary
+    +datetime created_at
+  }
+  note for unmapped_skill_suggestions "raw document; no indexes"
+
+  class knowledge_chunks {
+    +ObjectId _id
+    +string text
+    +string chunk_type
+    +string[] tags
+    +string source_id
+    +int chunk_index
+    +float[] vector
+    +string embed_model
+    +int embed_dim
+    +datetime created_at
+  }
+  note for knowledge_chunks "raw document; no indexes; cosine scan in Python"
+
+  class insights_narrative_cache {
+    +ObjectId _id
+    +string facts_key
+    +string narrative
+    +datetime created_at
+  }
+  note for insights_narrative_cache "raw document; trimmed to newest 200"
+
+  class notifications {
+    +string user_id
+    +bool read
+    +datetime created_at
+  }
+  note for notifications "RESERVED - index only, no read or write code"
+
+  users "1" --> "0..1" students : user_id
+  users "1" --> "0..1" tpos : user_id
+  users "1" --> "0..1" admins : user_id
+  users "1" --> "0..*" refresh_tokens : user_id
+  users "1" --> "0..*" password_reset_tokens : user_id
+  users "1" --> "0..*" activity_logs : user_id
+  students "1" --> "0..*" resumes : student_id
+  students "1" --> "0..*" applications : student_id
+  students "1" --> "0..*" assessment_attempts : student_id
+  students "1" --> "0..*" knowledge_states : student_id
+  companies "1" --> "0..*" placement_drives : company_id
+  tpos "1" --> "0..*" placement_drives : created_by
+  placement_drives "1" --> "0..*" applications : drive_id
+  resumes "1" --> "0..*" applications : resume_id
+  assessments "1" --> "0..*" assessment_attempts : assessment_id
+  question_categories "1" --> "0..*" questions : category_id
+  question_categories "1" --> "0..*" question_categories : parent_category_id
+  assessment_templates "1" --> "0..*" assessments : template_id
+
+
+%% ===========================================================================
+%% GROUP D — COMPLETE DATA-FLOW DIAGRAM (15 WORKFLOWS)
+%% Notation: stadium = external entity, rectangle = process, cylinder = data
+%% store. Process numbers P1-P15 correspond to the workflow catalogue in
+%% docs/PLACER_SYSTEM_DESIGN_AND_DATA_FLOW.md.
+%% ===========================================================================
+
+flowchart TB
+  STUDENT(["Student"])
+  TPO(["TPO"])
+  ADMIN(["Admin"])
+  GOOGLE(["Google Identity"])
+  LLM(["LLM / embedding provider"])
+
+  subgraph WF1["P1 Authentication and session"]
+    P1["Register · login · Google sign-in<br/>refresh · logout · password reset"]
+  end
+  subgraph WF2["P2 Student profile"]
+    P2["Read and update profile<br/>canonicalise department"]
+  end
+  subgraph WF3["P3 Resume ingestion"]
+    P3["Upload PDF · hash · version<br/>extract text / OCR · parse"]
+  end
+  subgraph WF4["P4 Resume AI enrichment"]
+    P4["LLM skill extraction<br/>bi-encoder embedding<br/>profile autofill suggestion"]
+  end
+  subgraph WF5["P5 Drive discovery and matching"]
+    P5["List open drives<br/>eligibility pre-check<br/>match score · recommendations"]
+  end
+  subgraph WF6["P6 Application submission"]
+    P6["Validate eligibility and deadline<br/>one application per drive<br/>store match snapshot"]
+  end
+  subgraph WF7["P7 TPO drive authoring"]
+    P7["Create · update · clone · close<br/>attach required assessment"]
+  end
+  subgraph WF8["P8 AI screening and decisions"]
+    P8["Eligibility verification<br/>hybrid resume-JD scoring<br/>recommended shortlist<br/>status transition"]
+  end
+  subgraph WF9["P9 Question bank and templates"]
+    P9["Question CRUD · categories<br/>Excel import/export<br/>assessment templates"]
+  end
+  subgraph WF10["P10 Drive assessment generation"]
+    P10["Eligibility check · 6/10/4 quota<br/>five 4-question sections<br/>publish and link to drive"]
+  end
+  subgraph WF11["P11 Assessment attempt"]
+    P11["Start · serve questions<br/>grade answer · adaptive step<br/>anti-cheat · finish"]
+  end
+  subgraph WF12["P12 Scoring and knowledge tracing"]
+    P12["Finalise score · pass/fail<br/>update application<br/>EMA mastery per skill"]
+  end
+  subgraph WF13["P13 Student analytics and insights"]
+    P13["Application counts · domain radar<br/>score trend · gap analysis<br/>LLM study guide"]
+  end
+  subgraph WF14["P14 TPO analytics and skill gaps"]
+    P14["Funnels · departments · monthly trend<br/>company breakdown · rankings<br/>participation · gap priority"]
+  end
+  subgraph WF15["P15 Market insights and admin oversight"]
+    P15["Import market postings<br/>demand and growth analytics<br/>platform analytics · audit log"]
+  end
+
+  DS_USERS[("users · students · tpos · admins<br/>refresh_tokens · password_reset_tokens")]
+  DS_RESUME[("resumes<br/>file storage")]
+  DS_DRIVE[("companies · placement_drives")]
+  DS_APP[("applications")]
+  DS_QUEST[("question_categories · questions<br/>assessment_templates")]
+  DS_ASSESS[("assessments · assessment_attempts")]
+  DS_KT[("knowledge_states")]
+  DS_LOG[("activity_logs")]
+  DS_MARKET[("job_market_postings<br/>market_skill_catalog · market_import_runs")]
+  DS_AI[("knowledge_chunks<br/>insights_narrative_cache")]
+
+  STUDENT --> P1
+  TPO --> P1
+  ADMIN --> P1
+  GOOGLE --> P1
+  P1 --> DS_USERS
+
+  STUDENT --> P2
+  P2 --> DS_USERS
+  P2 --> DS_LOG
+
+  STUDENT --> P3
+  P3 --> DS_RESUME
+  P3 --> P4
+
+  P4 --> LLM
+  P4 --> DS_RESUME
+  P4 --> DS_USERS
+
+  STUDENT --> P5
+  P5 --> DS_DRIVE
+  P5 --> DS_RESUME
+  P5 --> LLM
+
+  STUDENT --> P6
+  P6 --> DS_APP
+  P6 --> DS_DRIVE
+  P6 --> DS_LOG
+
+  TPO --> P7
+  P7 --> DS_DRIVE
+  P7 --> DS_ASSESS
+  P7 --> DS_LOG
+
+  TPO --> P8
+  ADMIN --> P8
+  P8 --> DS_APP
+  P8 --> DS_DRIVE
+  P8 --> DS_RESUME
+  P8 --> DS_ASSESS
+  P8 --> LLM
+  P8 --> DS_LOG
+
+  ADMIN --> P9
+  P9 --> DS_QUEST
+  P9 --> DS_LOG
+
+  ADMIN --> P10
+  P10 --> DS_QUEST
+  P10 --> DS_ASSESS
+  P10 --> DS_DRIVE
+  P10 --> DS_LOG
+
+  STUDENT --> P11
+  P11 --> DS_ASSESS
+  P11 --> P12
+
+  P12 --> DS_ASSESS
+  P12 --> DS_APP
+  P12 --> DS_KT
+  P12 --> DS_LOG
+
+  STUDENT --> P13
+  P13 --> DS_APP
+  P13 --> DS_ASSESS
+  P13 --> DS_KT
+  P13 --> DS_AI
+  P13 --> LLM
+
+  TPO --> P14
+  P14 --> DS_APP
+  P14 --> DS_DRIVE
+  P14 --> DS_ASSESS
+  P14 --> DS_KT
+  P14 --> DS_MARKET
+
+  ADMIN --> P15
+  TPO --> P15
+  P15 --> DS_MARKET
+  P15 --> DS_APP
+  P15 --> DS_USERS
+  P15 --> DS_LOG
+  P15 --> LLM
+
+
+%% ===========================================================================
+%% GROUP E1 — STUDENT WORKFLOW
+%% ===========================================================================
+
+flowchart LR
+  subgraph E1A["Entry and identity"]
+    direction TB
+    SE1["/login or /register<br/>or Google sign-in"]
+    SE2["JWT access token in memory<br/>refresh token httpOnly cookie<br/>placer_role cookie"]
+    SE3["Student layout guard<br/>role != student → /login"]
+    SE1 --> SE2 --> SE3
+  end
+
+  subgraph E1B["Prepare profile and resume"]
+    direction TB
+    SP1["/dashboard/profile<br/>GET · PUT /students/me"]
+    SP2["/dashboard/resume<br/>POST /resumes"]
+    SP3["Parse + embed<br/>POST /resumes/{id}/reparse"]
+    SP4["Autofill suggestion<br/>GET /resumes/{id}/autofill-suggestion"]
+    SP5["Apply autofill<br/>POST /resumes/{id}/autofill-apply"]
+    SP1 --> SP2 --> SP3 --> SP4 --> SP5
+    SP5 --> SP1
+  end
+
+  subgraph E1C["Find and apply"]
+    direction TB
+    SD1["/dashboard/drives<br/>GET /drives?status_filter=open"]
+    SD2["/dashboard/drives/[id]<br/>GET /drives/{id}"]
+    SD3["Match score<br/>GET /matching/drives/{id}/score"]
+    SD4["Apply<br/>POST /drives/{id}/apply"]
+    SD5["/dashboard/applications<br/>GET /drives/applications/me"]
+    SD1 --> SD2 --> SD3 --> SD4 --> SD5
+  end
+
+  subgraph E1D["Take the drive assessment"]
+    direction TB
+    SA1["/dashboard/assessments<br/>GET /assessments"]
+    SA2["Start<br/>POST /assessments/{id}/start<br/>with application_id"]
+    SA3["/take/[attemptId]<br/>GET attempts/{id}/questions"]
+    SA4["Answer · run code · report violation<br/>POST answer · run-code · violation"]
+    SA5["Finish<br/>POST attempts/{id}/finish"]
+    SA1 --> SA2 --> SA3 --> SA4 --> SA5
+  end
+
+  subgraph E1E["Review and improve"]
+    direction TB
+    SR1["/results/[attemptId]<br/>GET attempts/{id}/results"]
+    SR2["Gap analysis<br/>GET /assessments/attempts/{id}/gap-analysis"]
+    SR3["/dashboard/insights<br/>GET /insights/me"]
+    SR4["Knowledge states<br/>GET /assessments/knowledge-states/me"]
+    SR5["/dashboard<br/>GET /analytics/student/me"]
+    SR1 --> SR2 --> SR3
+    SR3 --> SR4
+    SR4 --> SR5
+  end
+
+  E1A --> E1B
+  E1B --> E1C
+  E1C --> E1D
+  E1D --> E1E
+
+
+%% ===========================================================================
+%% GROUP E2 — TPO WORKFLOW
+%% ===========================================================================
+
+flowchart LR
+  subgraph E2A["Entry"]
+    direction TB
+    TE1["/login<br/>role = tpo"]
+    TE2["TPO layout guard<br/>/tpo/dashboard"]
+    TE1 --> TE2
+  end
+
+  subgraph E2B["Create and run a drive"]
+    direction TB
+    TD1["/tpo/dashboard/drives/new<br/>POST /drives"]
+    TD2["Attach required assessment<br/>PUT /drives/{id}"]
+    TD3["/tpo/dashboard/drives<br/>GET /drives/mine"]
+    TD4["/drives/[id]<br/>GET · PUT · POST clone · DELETE"]
+    TD1 --> TD2 --> TD3 --> TD4
+  end
+
+  subgraph E2C["Screen and decide"]
+    direction TB
+    TS1["/drives/[id]/applicants<br/>GET /drives/{id}/applications"]
+    TS2["Screening summary<br/>GET /drives/{id}/screening-summary"]
+    TS3["Run screening<br/>POST /drives/{id}/screen"]
+    TS4["Recommended shortlist<br/>GET /drives/{id}/recommended-shortlist"]
+    TS5["Per-row decision<br/>PATCH /drives/{id}/applications/{appId}"]
+    TS6["Bulk decision<br/>PATCH .../applications/bulk-status"]
+    TS7["Export CSV<br/>GET .../applications/export"]
+    TS1 --> TS2 --> TS3 --> TS4 --> TS5
+    TS5 --> TS6
+    TS6 --> TS7
+  end
+
+  subgraph E2D["Monitor outcomes"]
+    direction TB
+    TM1["/tpo/dashboard<br/>GET /analytics/tpo<br/>GET /analytics/tpo/applications"]
+    TM2["Drive breakdown<br/>ranking · applicants · participants"]
+    TM3["Drill-down records<br/>GET /analytics/tpo/applications/records"]
+    TM4["/analytics/trending<br/>GET /analytics/tpo/market"]
+    TM5["/analytics/skill-gaps<br/>GET /analytics/tpo/skill-gaps"]
+    TM1 --> TM2 --> TM3
+    TM1 --> TM4
+    TM1 --> TM5
+  end
+
+  E2A --> E2B
+  E2B --> E2C
+  E2C --> E2D
+
+
+%% ===========================================================================
+%% GROUP E3 — ADMIN WORKFLOW
+%% ===========================================================================
+
+flowchart LR
+  subgraph E3A["Entry"]
+    direction TB
+    AE1["/login<br/>role = admin"]
+    AE2["Admin layout guard<br/>/admin/dashboard"]
+    AE1 --> AE2
+  end
+
+  subgraph E3B["Curate the question bank"]
+    direction TB
+    AQ1["/questions<br/>GET /questions · /questions/stats"]
+    AQ2["/questions/new<br/>POST /questions · POST /questions/categories"]
+    AQ3["Import<br/>POST /questions/import/preview<br/>POST /questions/import/commit"]
+    AQ4["Export<br/>GET /questions/export/excel<br/>GET /questions/export/template"]
+    AQ5["Status and edit<br/>PATCH /questions/{id}/status<br/>PUT /questions/{id}"]
+    AQ1 --> AQ2 --> AQ3 --> AQ4 --> AQ5
+  end
+
+  subgraph E3C["Build assessments and templates"]
+    direction TB
+    AA1["/templates<br/>GET /assessments/templates"]
+    AA2["/assessments/new<br/>POST /assessments"]
+    AA3["Presets<br/>GET /assessments/templates/presets"]
+    AA4["/placement<br/>GET /assessments/placement/eligibility"]
+    AA5["Generate<br/>POST /assessments/placement/generate"]
+    AA6["Revise<br/>POST /assessments/placement/{id}/revise"]
+    AA1 --> AA2
+    AA3 --> AA2
+    AA4 --> AA5 --> AA6
+  end
+
+  subgraph E3D["Oversee the platform"]
+    direction TB
+    AO1["/admin/dashboard<br/>GET /analytics/admin<br/>GET /analytics/admin/activity"]
+    AO2["/admin/dashboard/analytics<br/>GET /analytics/admin/applications"]
+    AO3["Cross-drive decision<br/>PATCH /drives/{driveId}/applications/{appId}"]
+    AO4["/admin/dashboard/drives<br/>GET /drives/mine"]
+    AO5["Observability<br/>GET /admin/observability/llm"]
+    AO6["Knowledge store<br/>POST /admin/knowledge/chunks<br/>GET /admin/knowledge/stats"]
+    AO1 --> AO2 --> AO3
+    AO1 --> AO4
+    AO1 --> AO5
+    AO1 --> AO6
+  end
+
+  E3A --> E3B
+  E3B --> E3C
+  E3C --> E3D
+
+
+%% ===========================================================================
+%% GROUP F — AI MODEL ARCHITECTURE AND INFERENCE FLOW
+%% Implemented components only. The cross-encoder and bi-encoder require the
+%% artifacts directory; when absent the API returns 503 and the UI degrades.
+%% ===========================================================================
+
+flowchart TB
+  subgraph F1["Resume ingestion and representation"]
+    direction TB
+    R1["PDF bytes<br/>max 5 MB"]
+    R2["PyMuPDF text extraction"]
+    R3{"text < 50 chars<br/>or low alphanumeric ratio?"}
+    R4["PaddleOCR PP-OCRv4<br/>render 150 DPI"]
+    R5["Regex section parser<br/>contact · education · experience<br/>projects · skills"]
+    R6["LLM constrained skill extractor<br/>JSON-only, validated against catalogue"]
+    R7["skill_set · experience_years"]
+    R8["build_resume_text<br/>skills + years"]
+    R9["Bi-encoder all-MiniLM-L6-v2<br/>mean pooling + L2 normalisation"]
+    R10[("resumes.resume_embedding")]
+    R11[("unmapped_skill_suggestions")]
+    R1 --> R2 --> R3
+    R3 -->|yes| R4 --> R5
+    R3 -->|no| R5
+    R5 --> R6 --> R7 --> R8 --> R9 --> R10
+    R6 -->|rejected phrases| R11
+  end
+
+  subgraph F2["Job description representation"]
+    direction TB
+    J1["placement_drives.jd_text<br/>title · company · description<br/>required skills · years"]
+    J2["build_jd_text"]
+    J3["Bi-encoder embedding"]
+    J4[("placement_drives.jd_embedding")]
+    J1 --> J2 --> J3 --> J4
+  end
+
+  subgraph F3["Two-stage matching"]
+    direction TB
+    M1["Stage 1 retrieval<br/>cosine over cached embeddings<br/>top k candidates"]
+    M2["Stage 2 rerank<br/>cross-encoder stsb-roberta-base<br/>sigmoid relevance"]
+    M3["Platt calibration<br/>calibrated semantic score"]
+    M4["Skills score<br/>matched / required"]
+    M5["Experience fit<br/>min 1, resume_years / jd_years"]
+    M6["Assessment score<br/>assessment_score_pct / 100"]
+    M7["Final score<br/>0.40 semantic + 0.30 skills<br/>+ 0.20 experience + 0.10 assessment"]
+    M8[("applications.final_score<br/>semantic · skills · experience")]
+    M1 --> M2 --> M3 --> M7
+    M4 --> M7
+    M5 --> M7
+    M6 --> M7
+    M7 --> M8
+  end
+
+  subgraph F4["RAG explanation and narrative"]
+    direction TB
+    G1["Source text<br/>syllabus · explanations<br/>JD · skill taxonomy"]
+    G2["Chunk 1200 chars<br/>overlap 150"]
+    G3["Embedding client<br/>nomic-embed-text or equivalent"]
+    G4[("knowledge_chunks<br/>vector · embed_model · tags")]
+    G5["Retrieve top 5<br/>cosine, same model and dim"]
+    G6["Prompt assembly<br/>facts + retrieved context"]
+    G7["LLM client<br/>primary → fallback<br/>timeout 30 s · 2 retries"]
+    G8[("insights_narrative_cache<br/>keyed by SHA-256 of facts")]
+    G9["Markdown narrative<br/>rendered by MarkdownText"]
+    G1 --> G2 --> G3 --> G4
+    G4 --> G5 --> G6 --> G7 --> G9
+    G7 --> G8
+  end
+
+  subgraph F5["Knowledge tracing"]
+    direction TB
+    K1["Graded answer<br/>correct / incorrect"]
+    K2["Difficulty weight<br/>easy 0.7 · medium 1.0 · hard 1.3"]
+    K3["EMA update<br/>mastery += 0.25 × weight × (target − mastery)"]
+    K4["Clamp 0-100<br/>confidence = min 1, attempts / 10"]
+    K5[("knowledge_states<br/>history capped at 50")]
+    K1 --> K2 --> K3 --> K4 --> K5
+  end
+
+  subgraph F6["Analytics inference"]
+    direction TB
+    N1["Graded answers only<br/>is_correct is not None"]
+    N2["Domain attribution<br/>section metadata first<br/>then keyword table<br/>then question type"]
+    N3["Domain score<br/>100 × awarded / max"]
+    N4["Radar + trend series"]
+    N1 --> N2 --> N3 --> N4
+  end
+
+  R10 --> M1
+  J4 --> M1
+  M8 --> G6
+  K5 --> N1
+  G4 --> G6

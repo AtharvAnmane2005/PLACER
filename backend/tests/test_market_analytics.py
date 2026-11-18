@@ -173,6 +173,9 @@ async def test_tpo_gets_full_market_analytics_shape(client, mock_mongo, dataset)
         "previous_period",
         "comparison_comparable",
         "filtered_years",
+        "sources",
+        "data_origin",
+        "latest_import_at",
     }
     assert set(body["summary"]) == {
         "total_postings",
@@ -353,8 +356,8 @@ async def test_partial_year_windows_are_used_for_comparisons(client, mock_mongo,
         else:
             assert skill["yoy_growth_pct"] is None
 
-    # Historical growth: Jan-Oct pair for the partial latest year, full years
-    # for every earlier pair.
+    # Historical growth: the whole series uses the same Jan-Oct window when the
+    # latest year is partial, so the plotted line and growth cannot disagree.
     historical = {entry["slug"]: entry for entry in body["historical_trends"]}
     assert len(historical) == 52
     for entry in body["historical_trends"]:
@@ -363,12 +366,9 @@ async def test_partial_year_windows_are_used_for_comparisons(client, mock_mongo,
             if item["year"] == 2023:
                 assert item["yoy_growth_pct"] is None  # 2022 is outside the dataset
                 continue
-            if item["year"] == 2026:
-                current = _count_in(postings, name, 2026, months=(1, 10))
-                previous = _count_in(postings, name, 2025, months=(1, 10))
-            else:
-                current = _count_in(postings, name, item["year"])
-                previous = _count_in(postings, name, item["year"] - 1)
+            current = _count_in(postings, name, item["year"], months=(1, 10))
+            previous = _count_in(postings, name, item["year"] - 1, months=(1, 10))
+            assert item["window_posting_count"] == current
             if previous == 0:
                 assert item["yoy_growth_pct"] is None
             else:
@@ -658,9 +658,12 @@ async def test_empty_collection_returns_valid_empty_response(client, mock_mongo)
     assert filters.json() == {
         "years": [],
         "companies": [],
+        "company_total": 0,
         "job_families": [],
         "locations": [],
+        "location_total": 0,
         "skill_categories": [],
+        "sources": [],
     }
 
 
@@ -760,7 +763,7 @@ async def _seed_mini_dataset(mock_mongo):
         _mini_posting("mini-1", "Alpha Labs", 2025, 3, ["Python"]),
         _mini_posting("mini-2", "Alpha Labs", 2026, 2, ["Python", "Rust"]),
         _mini_posting("mini-3", "Beta Systems", 2025, 5, ["Legacy System"]),
-        _mini_posting("mini-4", "Beta Systems", 2025, 8, ["Legacy System"]),
+        _mini_posting("mini-4", "Beta Systems", 2025, 4, ["Legacy System"]),
         _mini_posting("mini-5", "Beta Systems", 2026, 5, ["Legacy System"]),
     ]
     await JobMarketPostingRepository(mock_mongo).create_many(deepcopy(postings))
@@ -774,7 +777,7 @@ async def test_emerging_skills_detected_from_window_counts(client, mock_mongo):
     body = (await client.get(MARKET_URL, headers=_auth(token))).json()
 
     emerging = body["emerging_skills"]
-    # Rust: zero Jan-Oct 2025 postings, one Jan-Oct 2026 posting.
+    # Rust: zero postings in the Jan-May 2025 window, one in Jan-May 2026.
     assert [skill["slug"] for skill in emerging] == ["rust"]
     assert emerging[0]["current_period_count"] == 1
     assert emerging[0]["previous_period_count"] == 0
@@ -783,7 +786,7 @@ async def test_emerging_skills_detected_from_window_counts(client, mock_mongo):
 
     trends = {skill["slug"]: skill["trend"] for skill in body["trending_skills"]}
     assert trends["rust"] == "emerging"
-    assert trends["legacy-system"] == "declining"  # 2 -> 1 within the Jan-Oct windows
+    assert trends["legacy-system"] == "declining"  # 2 -> 1 within the Jan-May windows
     assert trends["python"] == "stable"  # 1 -> 1
     assert body["summary"]["yoy_posting_growth_pct"] == round(100 * (2 - 3) / 3, 1)
 
@@ -801,7 +804,9 @@ async def test_excluded_previous_period_is_not_emerging(client, mock_mongo):
     # 2025 was excluded by the year filter, so nothing may be called "emerging".
     assert body["emerging_skills"] == []
     assert body["meta"]["comparison_comparable"] is False
-    assert body["meta"]["current_period"]["label"] == "Jan-Oct 2026"
+    # The window is data-driven: 2026 has postings through May, and 2025's
+    # coverage does not shrink it below that.
+    assert body["meta"]["current_period"]["label"] == "Jan-May 2026"
     assert all(skill["trend"] is None for skill in body["trending_skills"])
     assert all(skill["yoy_growth_pct"] is None for skill in body["trending_skills"])
     assert body["summary"]["yoy_posting_growth_pct"] is None
@@ -1084,7 +1089,7 @@ async def test_comparison_emerging_and_shares_on_mini_dataset(client, mock_mongo
     alpha = body["entities"][0]
     beta = body["entities"][1]
 
-    # Alpha: Rust appeared Jan-Oct 2026 but not in the comparable Jan-Oct 2025
+    # Alpha: Rust appeared Jan-May 2026 but not in the comparable Jan-May 2025
     # window, and Alpha DID have postings in that previous window, so the
     # backend may classify it emerging — never a filter artefact.
     alpha_skills = _entity_skill_map(alpha)

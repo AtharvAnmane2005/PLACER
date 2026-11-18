@@ -9,6 +9,7 @@ both need this to actually do something.
 """
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from app.core.departments import normalize_department
 from app.models.user import StudentInDB, StudentProfileUpdateRequest
 from app.repositories.profile_repositories import StudentRepository
 
@@ -66,6 +67,11 @@ class StudentProfileService:
         updates = payload.model_dump(exclude_unset=True)
         if not updates:
             return student
+
+        # Keep the stored department canonical so it matches drive eligibility
+        # criteria written through the same rules.
+        if "department" in updates:
+            updates["department"] = normalize_department(updates["department"])
 
         merged = student.model_copy(update=updates)
         updates["profile_completeness_pct"] = _compute_completeness_pct(merged)

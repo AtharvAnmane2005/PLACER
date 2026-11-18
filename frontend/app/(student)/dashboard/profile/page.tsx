@@ -129,7 +129,7 @@ export default function StudentProfilePage() {
       <Card>
         <form onSubmit={handleSubmit(onSubmit)}>
           <CardHeader>
-            <CardTitle>Basic details</CardTitle>
+            <CardTitle className="text-base">Basic details</CardTitle>
             <CardDescription>{profile.profile_completeness_pct}% complete</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -139,7 +139,7 @@ export default function StudentProfilePage() {
               {errors.name && <p className="text-sm text-destructive">{errors.name.message}</p>}
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="department">Department</Label>
                 <Combobox
@@ -163,7 +163,7 @@ export default function StudentProfilePage() {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="cgpa">CGPA</Label>
                 <Input id="cgpa" type="number" step="0.01" min={0} max={10} {...register("cgpa")} />

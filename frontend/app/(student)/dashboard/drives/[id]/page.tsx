@@ -7,11 +7,13 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ApplicationStatusBadge } from "@/components/shared/application-status-badge";
 import { MatchScoreCard } from "@/components/shared/match-score-card";
 import { useToast } from "@/hooks/use-toast";
 import { useApplyToDrive, useDriveDetail, useMyApplications } from "@/hooks/use-drives";
 import { useDriveMatchScore } from "@/hooks/use-matching";
 import { useStudentProfile } from "@/hooks/use-student-profile";
+import { departmentMatches } from "@/lib/departments";
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { dateStyle: "medium" });
@@ -42,10 +44,7 @@ export default function DriveDetailPage() {
     if (drive.eligibility.min_cgpa !== null && (profile.cgpa === null || profile.cgpa < drive.eligibility.min_cgpa)) {
       eligibilityIssues.push(`Requires minimum CGPA of ${drive.eligibility.min_cgpa}.`);
     }
-    if (
-      drive.eligibility.departments.length > 0 &&
-      (!profile.department || !drive.eligibility.departments.includes(profile.department))
-    ) {
+    if (!departmentMatches(profile.department, drive.eligibility.departments)) {
       eligibilityIssues.push(`Open to: ${drive.eligibility.departments.join(", ")}.`);
     }
     if (
@@ -80,7 +79,7 @@ export default function DriveDetailPage() {
       <div>
         <div className="mb-2 flex items-center gap-2">
           <Badge variant={closed ? "secondary" : "success"}>{closed ? "Closed" : "Open"}</Badge>
-          {existingApplication && <Badge variant="outline">Application: {existingApplication.status}</Badge>}
+          {existingApplication && <ApplicationStatusBadge status={existingApplication.status} />}
         </div>
         <h1 className="font-display text-2xl font-semibold">{drive.job_title}</h1>
         <div className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
@@ -153,7 +152,7 @@ export default function DriveDetailPage() {
           ) : (
             <>
               {eligibilityIssues.length > 0 && (
-                <div className="rounded-md border border-warning bg-secondary p-3 text-sm">
+                <div className="rounded-md border border-warning/30 bg-warning/10 p-3 text-sm">
                   <p className="mb-1 font-medium text-warning">Before you apply:</p>
                   <ul className="list-inside list-disc">
                     {eligibilityIssues.map((issue, i) => (

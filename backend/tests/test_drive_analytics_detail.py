@@ -179,8 +179,18 @@ async def test_per_drive_endpoints_require_tpo_role(client):
     for path in paths:
         assert (await client.get(path)).status_code == 401, path
         assert (await client.get(path, headers=_auth(student_token))).status_code == 403, path
-        assert (await client.get(path, headers=_auth(admin_token))).status_code == 403, path
         assert (await client.get(path, headers=_auth(tpo_token))).status_code == 200, path
+
+    # Admins oversee every drive: they may read its ranking, but the
+    # applicant/participant drill-downs remain TPO-only.
+    assert (
+        await client.get(
+            f"/api/v1/analytics/tpo/drives/{drive_id}/ranking",
+            headers=_auth(admin_token),
+        )
+    ).status_code == 200
+    for path in paths[1:]:
+        assert (await client.get(path, headers=_auth(admin_token))).status_code == 403, path
 
 
 @pytest.mark.asyncio
@@ -250,7 +260,7 @@ async def test_applicants_include_all_statuses_with_metadata(client):
     assert {e["student_name"] for e in data["entries"]} == {
         "Alice Applied", "Bob Shortlisted", "Carol Rejected",
     }
-    assert all(e["department"] == "CS" and e["batch_year"] == 2026 for e in data["entries"])
+    assert all(e["department"] == "Computer Science" and e["batch_year"] == 2026 for e in data["entries"])
     assert all(e["applied_at"] for e in data["entries"])
 
 
@@ -417,6 +427,10 @@ async def test_participants_require_real_attempts(client):
     funnel = next(d for d in overview.json()["drives"] if d["drive_id"] == drive_id)
     assert funnel["participant_count"] == 2
     assert funnel["submitted_participant_count"] == 1
+    # Completion is submitted participants / eligible applications — three
+    # students applied and were eligible, one submitted.
+    assert funnel["eligible_application_count"] == 3
+    assert funnel["completion_rate_pct"] == 33.3
     assert funnel["assessment_title"] == "Participation Assessment"
 
 
@@ -637,6 +651,10 @@ async def test_main_analytics_response_no_longer_has_standalone_rankings(client)
     assert funnel["required_assessment_id"] == assessment_id
     assert funnel["participant_count"] == 0
     assert funnel["submitted_participant_count"] == 0
+    # Zero-safe: no applications means no denominator, so 0% rather than a
+    # divide error or a misleading 100%.
+    assert funnel["eligible_application_count"] == 0
+    assert funnel["completion_rate_pct"] == 0.0
 
     plain_funnel = next(d for d in data["drives"] if d["drive_id"] == plain.json()["id"])
     assert plain_funnel["required_assessment_id"] is None

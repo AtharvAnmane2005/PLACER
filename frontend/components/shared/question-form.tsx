@@ -24,10 +24,15 @@ const questionSchema = z
   .object({
     category_id: z.string().min(1, "Select a category."),
     difficulty: z.enum(["easy", "medium", "hard"]),
-    type: z.enum(["mcq", "coding", "descriptive"]),
+    type: z.enum(["mcq", "multiple_select", "true_false", "coding", "descriptive"]),
     text: z.string().min(1, "Question text is required."),
     options: z.string().optional(),
     correct_answer: z.string().optional(),
+    topic: z.string().optional(),
+    skill: z.string().optional(),
+    explanation: z.string().optional(),
+    marks: z.string().optional(),
+    status: z.enum(["active", "inactive"]).optional(),
     language: z.enum(["python", "javascript"]).optional(),
     starter_code: z.string().optional(),
     test_cases: z.array(testCaseSchema).optional(),
@@ -36,17 +41,39 @@ const questionSchema = z
   })
   .superRefine((values, ctx) => {
     const options = splitLines(values.options);
-    if (values.type === "mcq") {
+    if (values.type === "mcq" || values.type === "multiple_select") {
       if (options.length < 2) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["options"], message: "MCQ needs at least 2 options (one per line)." });
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["options"],
+          message: "This question needs at least 2 options (one per line).",
+        });
       }
-      if (!values.correct_answer?.trim()) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["correct_answer"], message: "MCQ requires a correct answer." });
-      } else if (!options.includes(values.correct_answer.trim())) {
+      const answers = values.type === "multiple_select" ? splitCsv(values.correct_answer) : splitLines(values.correct_answer);
+      if (answers.length === 0) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["correct_answer"],
-          message: "Correct answer must exactly match one of the options.",
+          message: values.type === "multiple_select" ? "Select at least one correct answer." : "Requires a correct answer.",
+        });
+      } else {
+        const invalid = answers.filter((answer) => !options.includes(answer));
+        if (invalid.length > 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["correct_answer"],
+            message: `Correct answer${invalid.length > 1 ? "s" : ""} must exactly match option text.`,
+          });
+        }
+      }
+    }
+    if (values.type === "true_false") {
+      const answer = values.correct_answer?.trim().toLowerCase();
+      if (answer !== "true" && answer !== "false") {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["correct_answer"],
+          message: "True/False questions require 'True' or 'False' as the correct answer.",
         });
       }
     }
@@ -120,6 +147,7 @@ export function QuestionForm({
       language: "python",
       starter_code: "",
       test_cases: [{ ...emptyTestCase }],
+      status: "active",
     },
   });
 
@@ -147,6 +175,11 @@ export function QuestionForm({
           : [{ ...emptyTestCase }],
       skill_tags: initialValues.skill_tags.join(", "),
       company_tags: initialValues.company_tags.join(", "),
+      topic: initialValues.topic ?? "",
+      skill: initialValues.skill ?? "",
+      explanation: initialValues.explanation ?? "",
+      marks: String(initialValues.marks),
+      status: initialValues.status,
     });
   }, [initialValues, reset]);
 
@@ -155,14 +188,30 @@ export function QuestionForm({
 
   const submit = handleSubmit(async (values) => {
     const isCoding = values.type === "coding";
+    let correctAnswer: string | undefined;
+    if (values.type === "mcq") {
+      correctAnswer = values.correct_answer?.trim() || undefined;
+    } else if (values.type === "multiple_select") {
+      correctAnswer = splitCsv(values.correct_answer).join("|") || undefined;
+    } else if (values.type === "true_false") {
+      const answer = values.correct_answer?.trim().toLowerCase();
+      correctAnswer = answer === "true" || answer === "false" ? (answer === "true" ? "True" : "False") : undefined;
+    } else if (isCoding) {
+      correctAnswer = values.correct_answer?.trim() || undefined;
+    }
+
     await onSubmit({
       category_id: values.category_id,
       difficulty: values.difficulty,
       type: values.type,
       text: values.text,
-      options: values.type === "mcq" ? splitLines(values.options) : [],
-      correct_answer:
-        values.type === "mcq" ? values.correct_answer?.trim() || undefined : undefined,
+      options:
+        values.type === "true_false"
+          ? ["True", "False"]
+          : values.type === "mcq" || values.type === "multiple_select"
+            ? splitLines(values.options)
+            : [],
+      correct_answer: correctAnswer,
       language: isCoding ? values.language : undefined,
       starter_code: isCoding ? values.starter_code?.trim() || undefined : undefined,
       test_cases: isCoding
@@ -175,12 +224,17 @@ export function QuestionForm({
         : [],
       skill_tags: splitCsv(values.skill_tags),
       company_tags: splitCsv(values.company_tags),
+      topic: values.topic?.trim() || null,
+      skill: values.skill?.trim() || null,
+      explanation: values.explanation?.trim() || null,
+      marks: values.marks ? Number(values.marks) : null,
+      status: values.status,
     });
   });
 
   return (
     <form onSubmit={submit} className="space-y-4">
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="space-y-2">
           <Label htmlFor="category_id">Category</Label>
           <Select value={watch("category_id")} onValueChange={(v) => setValue("category_id", v, { shouldValidate: true })}>
@@ -219,7 +273,9 @@ export function QuestionForm({
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="mcq">MCQ</SelectItem>
+            <SelectItem value="mcq">MCQ (single answer)</SelectItem>
+            <SelectItem value="multiple_select">Multiple select</SelectItem>
+            <SelectItem value="true_false">True / False</SelectItem>
             <SelectItem value="coding">Coding</SelectItem>
             <SelectItem value="descriptive">Descriptive</SelectItem>
           </SelectContent>
@@ -341,7 +397,7 @@ export function QuestionForm({
         </>
       )}
 
-      {questionType === "mcq" && (
+      {(questionType === "mcq" || questionType === "multiple_select") && (
         <div className="space-y-2">
           <Label htmlFor="options">Options (one per line)</Label>
           <Textarea id="options" rows={4} {...register("options")} />
@@ -349,13 +405,64 @@ export function QuestionForm({
         </div>
       )}
 
-      {questionType === "mcq" && (
+      {(questionType === "mcq" || questionType === "multiple_select" || questionType === "true_false") && (
         <div className="space-y-2">
-          <Label htmlFor="correct_answer">Correct answer (must match an option exactly)</Label>
-          <Input id="correct_answer" {...register("correct_answer")} />
+          <Label htmlFor="correct_answer">
+            {questionType === "multiple_select"
+              ? "Correct answers (comma-separated, matching option text)"
+              : questionType === "true_false"
+                ? "Correct answer (True or False)"
+                : "Correct answer (must match an option exactly)"}
+          </Label>
+          <Input
+            id="correct_answer"
+            placeholder={questionType === "multiple_select" ? "Option A, Option C" : undefined}
+            {...register("correct_answer")}
+          />
           {errors.correct_answer && <p className="text-sm text-destructive">{errors.correct_answer.message}</p>}
         </div>
       )}
+
+      {questionType === "coding" && (
+        <div className="space-y-2">
+          <Label htmlFor="legacy_correct_answer">Legacy expected output (optional, for questions without test cases)</Label>
+          <Input id="legacy_correct_answer" {...register("correct_answer")} />
+        </div>
+      )}
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2">
+          <Label htmlFor="topic">Topic</Label>
+          <Input id="topic" placeholder="e.g. Trees" {...register("topic")} />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="skill">Primary skill</Label>
+          <Input id="skill" placeholder="e.g. Algorithms" {...register("skill")} />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="marks">Marks (leave blank for difficulty default)</Label>
+          <Input id="marks" type="number" min={0} {...register("marks")} />
+        </div>
+        <div className="space-y-2">
+          <Label htmlFor="status">Status</Label>
+          <Select
+            value={watch("status") ?? "active"}
+            onValueChange={(v) => setValue("status", v as QuestionFormValues["status"])}
+          >
+            <SelectTrigger id="status">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="active">Active</SelectItem>
+              <SelectItem value="inactive">Inactive</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="explanation">Explanation (revealed only in results)</Label>
+        <Textarea id="explanation" rows={2} {...register("explanation")} />
+      </div>
 
       <div className="space-y-2">
         <Label htmlFor="skill_tags">Skill tags (comma-separated)</Label>

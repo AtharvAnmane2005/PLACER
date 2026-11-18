@@ -129,13 +129,13 @@ async def test_ingest_endpoint_rejects_unknown_chunk_type(client, mock_mongo):
     svc = AuthService(mock_mongo)
     await svc.register_admin(
         AdminRegisterRequest(
-            email="kb.admin@college.edu", password="Admin@12345", name="KB Admin"
+            email="kb.admin@college.edu", password="StrongPass123", name="KB Admin"
         )
     )
     token = (
         await client.post(
             "/api/v1/auth/login",
-            json={"email": "kb.admin@college.edu", "password": "Admin@12345"},
+            json={"email": "kb.admin@college.edu", "password": "StrongPass123"},
         )
     ).json()["access_token"]
 
@@ -160,13 +160,13 @@ async def test_stats_endpoint_reports_zero_for_empty_store(client, mock_mongo):
     svc = AuthService(mock_mongo)
     await svc.register_admin(
         AdminRegisterRequest(
-            email="kb2.admin@college.edu", password="Admin@12345", name="KB Admin 2"
+            email="kb2.admin@college.edu", password="StrongPass123", name="KB Admin 2"
         )
     )
     token = (
         await client.post(
             "/api/v1/auth/login",
-            json={"email": "kb2.admin@college.edu", "password": "Admin@12345"},
+            json={"email": "kb2.admin@college.edu", "password": "StrongPass123"},
         )
     ).json()["access_token"]
 

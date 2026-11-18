@@ -10,6 +10,11 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.core.config import get_settings
 from app.core.database import get_database
 from app.core.deps import CurrentUser, get_current_user
+from app.core.google_oauth import (
+    GoogleCredentialError,
+    GoogleNotConfiguredError,
+    GoogleVerificationUnavailableError,
+)
 from app.core.limiter import limiter
 from app.models.user import (
     ForgotPasswordRequest,
@@ -126,11 +131,23 @@ async def google_auth(
         user, is_new = await service.authenticate_with_google(payload.credential, payload.role)
     except AuthError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
-    except ValueError as exc:
+    except GoogleNotConfiguredError as exc:
         # GOOGLE_CLIENT_ID not configured — a server misconfiguration, not
         # a client error.
         logger.error("Google auth misconfigured: %s", exc)
         raise HTTPException(status_code=500, detail="Google Sign-In is not available right now.") from exc
+    except GoogleCredentialError as exc:
+        # Malformed/expired/wrong-audience token. This is a rejected login,
+        # not an outage, so the client gets a 401 it can show the user.
+        logger.warning("Google credential rejected: %s", exc)
+        raise HTTPException(
+            status_code=401, detail="Google sign-in could not be verified. Please try again."
+        ) from exc
+    except GoogleVerificationUnavailableError as exc:
+        logger.error("Google token verification unavailable: %s", exc)
+        raise HTTPException(
+            status_code=503, detail="Google Sign-In is temporarily unavailable. Please try again."
+        ) from exc
 
     access_token, raw_refresh, _ = await service.issue_tokens(user)
     _set_refresh_cookie(response, raw_refresh)

@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
+from app.core import database as db_module
 from app.models.drive import VALID_STATUS_TRANSITIONS, ApplicationStatus
 from app.models.user import AdminRegisterRequest
 from app.services.auth_service import AuthService
@@ -11,13 +12,11 @@ MINIMAL_PDF_BYTES = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF"
 
 
 @pytest.mark.asyncio
-async def test_status_transitions_reject_skipping_shortlisting(client):
-    """Pins the status state machine itself.
+async def test_selected_status_is_not_settable_and_managed_statuses_toggle(client):
+    """The TPO workflow exposes only Applied / Shortlisted / Rejected.
 
-    An application cannot jump applied -> selected; it must be shortlisted
-    first. A test elsewhere once assumed otherwise and failed with a
-    misleading assertion rather than the real cause, so the rule is
-    asserted directly here.
+    A request to set ``selected`` is rejected, and the three managed statuses
+    can be freely toggled because a placement team may reverse a decision.
     """
     tpo_token = await _register_login_tpo(client, "transitions.tpo@college.edu")
     drive = await client.post("/api/v1/drives", headers=_auth_headers(tpo_token), json=_drive_payload())
@@ -25,20 +24,42 @@ async def test_status_transitions_reject_skipping_shortlisting(client):
 
     application_id = await _apply_with_new_student(client, drive_id, "transitions.applicant@college.edu")
 
-    skipped = await client.patch(
+    selected = await client.patch(
         f"/api/v1/drives/{drive_id}/applications/{application_id}",
         headers=_auth_headers(tpo_token),
         json={"status": "selected"},
     )
-    assert skipped.status_code == 400
-    assert "shortlisted" in skipped.json()["detail"].lower()
+    assert selected.status_code == 400
+    detail = selected.json()["detail"].lower()
+    assert "applied" in detail and "shortlisted" in detail and "rejected" in detail
 
-    # The declared table must agree with the enforced behaviour.
+    for status in ("rejected", "shortlisted", "applied", "rejected"):
+        response = await client.patch(
+            f"/api/v1/drives/{drive_id}/applications/{application_id}",
+            headers=_auth_headers(tpo_token),
+            json={"status": status},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == status
+
+    # The declared table agrees with the enforced workflow: Selected is never
+    # a managed target, and the managed statuses point at each other.
     assert ApplicationStatus.SELECTED not in VALID_STATUS_TRANSITIONS[ApplicationStatus.APPLIED]
-    assert ApplicationStatus.SELECTED in VALID_STATUS_TRANSITIONS[ApplicationStatus.SHORTLISTED]
-    # Terminal states have nowhere to go.
-    assert VALID_STATUS_TRANSITIONS[ApplicationStatus.SELECTED] == set()
-    assert VALID_STATUS_TRANSITIONS[ApplicationStatus.REJECTED] == set()
+    assert ApplicationStatus.SELECTED not in VALID_STATUS_TRANSITIONS[ApplicationStatus.SHORTLISTED]
+    assert VALID_STATUS_TRANSITIONS[ApplicationStatus.APPLIED] == {
+        ApplicationStatus.SHORTLISTED,
+        ApplicationStatus.REJECTED,
+    }
+    assert VALID_STATUS_TRANSITIONS[ApplicationStatus.SHORTLISTED] == {
+        ApplicationStatus.APPLIED,
+        ApplicationStatus.REJECTED,
+    }
+    assert VALID_STATUS_TRANSITIONS[ApplicationStatus.REJECTED] == {
+        ApplicationStatus.APPLIED,
+        ApplicationStatus.SHORTLISTED,
+    }
+    # A legacy Selected record can be corrected back into the workflow.
+    assert ApplicationStatus.REJECTED in VALID_STATUS_TRANSITIONS[ApplicationStatus.SELECTED]
 
 
 async def _register_login_student(client, email):
@@ -129,9 +150,80 @@ async def test_tpo_analytics_reflects_own_drives_only(client):
     assert data["total_applications"] == 2
     assert data["breakdown"]["shortlisted"] == 1
     assert data["breakdown"]["applied"] == 1
-    assert data["selection_rate_pct"] == 0.0  # none selected yet
+    # The TPO pipeline has no Selected stage: the key is absent, not zero.
+    assert "selected" not in data["breakdown"]
+    assert "selection_rate_pct" not in data
     assert len(data["drives"]) == 1
     assert data["drives"][0]["total_applications"] == 2
+
+
+@pytest.mark.asyncio
+async def test_admin_applications_workspace_filters_and_status_mapping(client):
+    admin_token = await _register_login_admin(client, "workspace.admin@college.edu")
+    tpo_token = await _register_login_tpo(client, "workspace.tpo@college.edu")
+    drive = await client.post(
+        "/api/v1/drives", headers=_auth_headers(tpo_token), json=_drive_payload()
+    )
+    drive_id = drive.json()["id"]
+    first_id = await _apply_with_new_student(client, drive_id, "workspace.one@college.edu")
+    second_id = await _apply_with_new_student(client, drive_id, "workspace.two@college.edu")
+
+    # Admin status changes use the existing audited endpoint.
+    shortlisted = await client.patch(
+        f"/api/v1/drives/{drive_id}/applications/{first_id}",
+        headers=_auth_headers(admin_token),
+        json={"status": "shortlisted"},
+    )
+    assert shortlisted.status_code == 200, shortlisted.text
+
+    response = await client.get(
+        "/api/v1/analytics/admin/applications", headers=_auth_headers(admin_token)
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["total"] == 2
+    assert data["summary"]["total"] == 2
+    assert data["summary"]["applied"] == 1
+    assert data["summary"]["shortlisted"] == 1
+    row = next(entry for entry in data["entries"] if entry["application_id"] == first_id)
+    assert row["student_name"]
+    assert row["company_name"] == "Analytics Corp"
+    assert row["job_title"] == "Software Engineer"
+    assert row["status"] == "shortlisted"
+
+    by_status = await client.get(
+        "/api/v1/analytics/admin/applications?status=shortlisted",
+        headers=_auth_headers(admin_token),
+    )
+    assert by_status.json()["total"] == 1
+
+    by_department = await client.get(
+        "/api/v1/analytics/admin/applications?department=CS",
+        headers=_auth_headers(admin_token),
+    )
+    assert by_department.json()["total"] == 2
+
+    # A legacy selected row is exposed as shortlisted, never as a fourth stage.
+    from bson import ObjectId
+
+    await db_module.mongodb.db.applications.update_one(
+        {"_id": ObjectId(second_id)}, {"$set": {"status": "selected"}}
+    )
+    mapped = await client.get(
+        "/api/v1/analytics/admin/applications?status=shortlisted",
+        headers=_auth_headers(admin_token),
+    )
+    assert mapped.json()["total"] == 2
+    assert all(entry["status"] == "shortlisted" for entry in mapped.json()["entries"])
+
+    filters = await client.get(
+        "/api/v1/analytics/admin/applications/filters", headers=_auth_headers(admin_token)
+    )
+    assert filters.status_code == 200, filters.text
+    filter_data = filters.json()
+    assert any(company["name"] == "Analytics Corp" for company in filter_data["companies"])
+    assert any(item["id"] == drive_id for item in filter_data["drives"])
+    assert "Computer Science" in filter_data["departments"]
 
 
 @pytest.mark.asyncio
@@ -162,25 +254,15 @@ async def test_admin_analytics_counts_placements_and_applications(client):
 
     application_id = await _apply_with_new_student(client, drive_id, "counts.applicant@college.edu")
 
-    # Walk the legal transition path. VALID_STATUS_TRANSITIONS permits
-    # applied -> shortlisted -> selected but NOT applied -> selected, so the
-    # original single PATCH was rejected with a 400 that this test never
-    # checked — it went on to assert placed_students >= 1 and failed with a
-    # misleading "0 >= 1" instead of the real cause. Each step's status is
-    # now asserted so a rejected transition fails here, loudly.
-    shortlisted = await client.patch(
-        f"/api/v1/drives/{drive_id}/applications/{application_id}",
-        headers=_auth_headers(tpo_token),
-        json={"status": "shortlisted"},
-    )
-    assert shortlisted.status_code == 200, shortlisted.text
+    # The live API no longer produces Selected; a legacy selected record is
+    # written directly to prove the admin placement metric still counts real
+    # stored outcomes (and to keep the legacy path covered).
+    from bson import ObjectId
 
-    selected = await client.patch(
-        f"/api/v1/drives/{drive_id}/applications/{application_id}",
-        headers=_auth_headers(tpo_token),
-        json={"status": "selected"},
+    await db_module.mongodb.db.applications.update_one(
+        {"_id": ObjectId(application_id)},
+        {"$set": {"status": "selected"}},
     )
-    assert selected.status_code == 200, selected.text
 
     response = await client.get("/api/v1/analytics/admin", headers=_auth_headers(admin_token))
     assert response.status_code == 200
@@ -188,5 +270,10 @@ async def test_admin_analytics_counts_placements_and_applications(client):
 
     assert data["total_drives"] >= 1
     assert data["total_applications"] >= 1
+    # The current analytics have no Selected stage: the legacy row is mapped
+    # into Shortlisted at read time, and the audit count records the mapping.
+    assert data["application_breakdown"]["selected"] == 0
+    assert data["application_breakdown"]["shortlisted"] >= 1
+    assert data["legacy_selected"] >= 1
+    # The internal legacy placement count is still derived from real records.
     assert data["placed_students"] >= 1
-    assert data["application_breakdown"]["selected"] >= 1

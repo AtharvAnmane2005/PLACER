@@ -88,7 +88,6 @@ from app.models.analytics import (
     StudentEvidenceSource,
 )
 from app.models.assessment import AttemptStatus
-from app.models.market import MARKET_IS_PARTIAL_YEAR, MARKET_LATEST_YEAR
 from app.ml.parsing.skill_normalizer import normalize_skill
 from app.repositories.application_repository import ApplicationRepository
 from app.repositories.attempt_repository import AttemptRepository
@@ -111,6 +110,7 @@ from app.services.market_analytics_service import (
     _aggregate_postings,
     _build_meta,
     _growth_pct,
+    _historical_end_month,
     _identity_for,
     _pct,
     _slugify,
@@ -271,6 +271,7 @@ class SkillGapService:
         location: str | None,
         skill_category: str | None,
         technical_only: bool,
+        source: str | None = None,
     ) -> tuple[_Context, dict[str, Any]]:
         """Load + aggregate everything both endpoints need.
 
@@ -281,17 +282,19 @@ class SkillGapService:
         """
         # --- 1. Industry demand (Market Insights dataset only) ---
         mongo_query = await self.market.build_posting_query(
-            year_from, year_to, company, job_family, location
+            year_from, year_to, company, job_family, location, source
         )
         posting_rows = await self.postings.find_projected(
             mongo_query, _POSTING_PROJECTION, limit=_MAX_POSTINGS
         )
+        coverage = await self.market.coverage_for(source)
         catalog_docs = await self.catalog.find_many(limit=_MAX_CATALOG_ENTRIES)
         catalog_by_name = {doc.name: doc for doc in catalog_docs}
         agg = _aggregate_postings(
             posting_rows,
             catalog_by_name,
             MarketQuery(skill_category=skill_category, technical_only=technical_only),
+            coverage,
         )
 
         # --- 2. Skill identity resolver (catalog + posting skill names) ---
@@ -434,6 +437,8 @@ class SkillGapService:
             "rows": posting_rows,
             "catalog_by_name": catalog_by_name,
             "agg": agg,
+            "coverage": coverage,
+            "source": source,
         }
         return context, market_ctx
 
@@ -458,9 +463,17 @@ class SkillGapService:
         skill_category: str | None,
         technical_only: bool,
         sort: str,
+        source: str | None = None,
     ) -> SkillGapAnalysisResponse:
         context, market_ctx = await self._build_context(
-            year_from, year_to, company, job_family, location, skill_category, technical_only
+            year_from,
+            year_to,
+            company,
+            job_family,
+            location,
+            skill_category,
+            technical_only,
+            source,
         )
         agg = market_ctx["agg"]
         catalog_by_name = market_ctx["catalog_by_name"]
@@ -525,13 +538,10 @@ class SkillGapService:
             rising_demand_skills=rising,
         )
 
-        source = posting_rows[0]["source"] if posting_rows else "mock"
-        dataset_version = (
-            posting_rows[0].get("dataset_version", "2026.11")
-            if posting_rows
-            else "2026.11"
+        sources, dataset_version, latest_import_at = await self.market.source_metadata(
+            posting_rows, source
         )
-        market_meta = _build_meta(agg, source, dataset_version)
+        market_meta = _build_meta(agg, sources, dataset_version, latest_import_at)
 
         meta = SkillGapMeta(
             market=market_meta,
@@ -582,10 +592,10 @@ class SkillGapService:
         summary — accumulated by the caller across entries."""
         slug, category, is_technical = _identity_for(name, catalog_by_name)
         full = agg.skill_yearly[name]
-        jan_oct = agg.skill_yearly_jan_oct[name]
+        windowed = agg.skill_yearly_window[name]
         partial = agg.current_window[1] != 12
-        current = _window_count(full, jan_oct, agg.latest_year, partial)
-        previous = _window_count(full, jan_oct, agg.latest_year - 1, partial)
+        current = _window_count(full, windowed, agg.latest_year, partial)
+        previous = _window_count(full, windowed, agg.latest_year - 1, partial)
         latest_growth_pct = _growth_pct(current, previous)
 
         # Company / job-family demand for this skill (inverted from the same
@@ -640,7 +650,10 @@ class SkillGapService:
         }
         assessed_ids = demonstrated_ids | developing_ids | not_demonstrated_ids
         both_ids = reported_ids & assessed_ids
-        reported_only_ids = reported_ids - assessed_ids - insufficient_ids
+        # A reporter with too few graded answers is still "reported only":
+        # insufficient assessment evidence must never promote someone into a
+        # demonstrated/developing class, nor hide their self-report.
+        reported_only_ids = reported_ids - assessed_ids
         # No evidence = neither self-reported nor any graded answer on this skill.
         no_evidence_count = population - len(
             reported_ids | assessed_ids | insufficient_ids
@@ -690,7 +703,9 @@ class SkillGapService:
                     year=year,
                     posting_count=full.get(year, 0),
                     demand_pct=_pct(full.get(year, 0), agg.yearly_totals.get(year, 0)),
-                    yoy_growth_pct=self._year_growth(full, jan_oct, year),
+                    yoy_growth_pct=self._year_growth(
+                        full, windowed, year, agg.coverage
+                    ),
                 )
                 for year in agg.years
             ],
@@ -698,12 +713,14 @@ class SkillGapService:
         return entry, demonstrated_ids, assessed_ids | insufficient_ids
 
     @staticmethod
-    def _year_growth(full: Any, jan_oct: Any, year: int) -> float | None:
+    def _year_growth(
+        full: Any, windowed: Any, year: int, coverage: dict[int, int]
+    ) -> float | None:
         """Comparable-window growth for one year of the display series
         (calendar counts are shown; growth never mixes partial windows)."""
-        partial = year == MARKET_LATEST_YEAR and MARKET_IS_PARTIAL_YEAR
-        current = _window_count(full, jan_oct, year, partial)
-        previous = _window_count(full, jan_oct, year - 1, partial)
+        partial = _historical_end_month(coverage, year) < 12
+        current = _window_count(full, windowed, year, partial)
+        previous = _window_count(full, windowed, year - 1, partial)
         return _growth_pct(current, previous)
 
     # -- Student-level endpoint ----------------------------------------------

@@ -177,6 +177,7 @@ export interface SkillGapStudentsResponse {
 
 /** Query parameters accepted by GET /api/v1/analytics/tpo/skill-gaps. */
 export interface SkillGapParams {
+  source?: string;
   year_from?: number;
   year_to?: number;
   company?: string;

@@ -225,3 +225,53 @@ async def test_local_password_login_rejected_for_google_only_account(client, mon
         "/api/v1/auth/login", json={"email": "googleonly@gmail.com", "password": "anything123"}
     )
     assert response.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_google_invalid_credential_returns_401_not_500(client, monkeypatch):
+    """A rejected Google token is a 401, not a server-outage 500."""
+    from app.core.google_oauth import GoogleCredentialError
+
+    def _reject(credential):
+        raise GoogleCredentialError("Google credential could not be verified.")
+
+    monkeypatch.setattr("app.services.auth_service.verify_google_token", _reject)
+
+    response = await client.post(
+        "/api/v1/auth/google", json={"credential": "bad-token", "role": "student"}
+    )
+    assert response.status_code == 401
+    assert "verified" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_google_missing_client_id_returns_500(client, monkeypatch):
+    """A missing GOOGLE_CLIENT_ID is a genuine server misconfiguration."""
+    from app.core.google_oauth import GoogleNotConfiguredError
+
+    def _not_configured(credential):
+        raise GoogleNotConfiguredError("GOOGLE_CLIENT_ID is not configured.")
+
+    monkeypatch.setattr("app.services.auth_service.verify_google_token", _not_configured)
+
+    response = await client.post(
+        "/api/v1/auth/google", json={"credential": "anything", "role": "student"}
+    )
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Google Sign-In is not available right now."
+
+
+@pytest.mark.asyncio
+async def test_google_verification_outage_returns_503(client, monkeypatch):
+    """Google's cert endpoint being unreachable is transient, not a bad login."""
+    from app.core.google_oauth import GoogleVerificationUnavailableError
+
+    def _unavailable(credential):
+        raise GoogleVerificationUnavailableError("Could not reach Google.")
+
+    monkeypatch.setattr("app.services.auth_service.verify_google_token", _unavailable)
+
+    response = await client.post(
+        "/api/v1/auth/google", json={"credential": "anything", "role": "student"}
+    )
+    assert response.status_code == 503

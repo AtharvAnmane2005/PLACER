@@ -32,3 +32,9 @@ class MongoBaseModel(BaseModel):
     )
 
     id: PyObjectId | None = Field(default=None, alias="_id")
+
+    # Provenance. Real records default to genuine/false; demo seed data sets
+    # these explicitly so every read path can distinguish it from real data
+    # instead of silently presenting synthetic rows as institutional records.
+    data_origin: str = "genuine"
+    is_synthetic: bool = False

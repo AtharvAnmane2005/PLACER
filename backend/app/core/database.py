@@ -66,6 +66,8 @@ async def ensure_market_indexes(db: AsyncIOMotorDatabase) -> None:
     await db.market_skill_catalog.create_index("slug", unique=True)
     await db.market_skill_catalog.create_index("category")
 
+    await db.market_import_runs.create_index([("source", 1), ("started_at", -1)])
+
 
 async def ensure_indexes() -> None:
     """
@@ -113,6 +115,20 @@ async def ensure_indexes() -> None:
     await db.assessments.create_index("drive_id", sparse=True)
     await db.assessment_attempts.create_index("assessment_id")
     await db.applications.create_index("assessment_attempt_id", sparse=True)
+
+    # Question bank management / standardized assessments / templates
+    await db.questions.create_index("status")
+    await db.questions.create_index("topic", sparse=True)
+    await db.questions.create_index("skill", sparse=True)
+    await db.questions.create_index("type")
+    await db.questions.create_index("updated_at", sparse=True)
+    await db.assessments.create_index([("format", 1), ("status", 1)])
+    await db.assessment_attempts.create_index([("assessment_id", 1), ("student_id", 1)])
+    await db.assessment_attempts.create_index(
+        [("assessment_id", 1), ("student_id", 1), ("status", 1)]
+    )
+    await db.assessment_templates.create_index("status")
+    await db.assessment_templates.create_index("preset_key", sparse=True)
 
     # Historical job-market analytics dataset (Trending Skills feature)
     await ensure_market_indexes(db)

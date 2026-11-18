@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from app.core.departments import normalize_department, normalize_departments
 from app.core.google_oauth import verify_google_token
 from app.core.security import (
     create_access_token,
@@ -84,7 +85,7 @@ class AuthService:
                 {
                     "user_id": user.id,
                     "name": payload.name,
-                    "department": payload.department,
+                    "department": normalize_department(payload.department),
                     "batch_year": payload.batch_year,
                     "skills": [],
                     "achievements": [],
@@ -116,7 +117,7 @@ class AuthService:
             {
                 "user_id": user.id,
                 "name": payload.name,
-                "department_scope": payload.department_scope,
+                "department_scope": normalize_departments(payload.department_scope),
             }
         )
         return user

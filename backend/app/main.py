@@ -109,6 +109,9 @@ def create_app() -> FastAPI:
 
     # --- Routers ---
     app.include_router(health.router, prefix=settings.API_V1_PREFIX)
+    # Root alias for container/uptime probes that do not use the API prefix.
+    # The canonical route remains /api/v1/health.
+    app.include_router(health.router)
     app.include_router(auth.router, prefix=f"{settings.API_V1_PREFIX}/auth", tags=["Auth"])
     app.include_router(resumes.router, prefix=f"{settings.API_V1_PREFIX}/resumes", tags=["Resumes"])
     app.include_router(students.router, prefix=f"{settings.API_V1_PREFIX}/students", tags=["Student Profile"])

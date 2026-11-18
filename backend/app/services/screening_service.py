@@ -17,6 +17,7 @@ from datetime import datetime
 import logging
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from app.core.departments import department_matches
 from app.models.drive import (
     ApplicationInDB,
     ApplicationStatus,
@@ -117,7 +118,7 @@ class ScreeningService:
                 if elig.min_cgpa is not None and (student.cgpa is None or student.cgpa < elig.min_cgpa):
                     is_eligible = False
                     elig_reasons.append(f"Minimum CGPA required: {elig.min_cgpa}")
-                if elig.departments and student.department not in elig.departments:
+                if not department_matches(student.department, elig.departments):
                     is_eligible = False
                     elig_reasons.append(f"Open only to: {', '.join(elig.departments)}")
                 if elig.batch_years and student.batch_year not in elig.batch_years:
@@ -164,7 +165,9 @@ class ScreeningService:
 
         applications = await self.applications.find_many({"drive_id": drive.id}, limit=5000)
 
-        total = len(applications)
+        # The cached application rows are bounded for memory safety; the total
+        # must come from the collection so a large drive is not under-reported.
+        total = await self.applications.count({"drive_id": drive.id})
         eligible = sum(1 for a in applications if a.eligibility_passed is not False)
         ineligible = sum(1 for a in applications if a.eligibility_passed is False)
 
@@ -176,7 +179,6 @@ class ScreeningService:
 
         shortlisted = sum(1 for a in applications if a.status == ApplicationStatus.SHORTLISTED.value)
         rejected = sum(1 for a in applications if a.status == ApplicationStatus.REJECTED.value)
-        selected = sum(1 for a in applications if a.status == ApplicationStatus.SELECTED.value)
 
         # Recommended shortlist candidate count: eligible + passed/not_req + final_score >= 0.65
         recommended = sum(
@@ -198,7 +200,6 @@ class ScreeningService:
             assessment_not_required=not_req,
             shortlisted=shortlisted,
             rejected=rejected,
-            selected=selected,
             recommended_shortlist=recommended,
         )
 

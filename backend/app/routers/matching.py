@@ -144,8 +144,24 @@ async def get_ranked_applicants(
     company_name = await _get_company_name(db, drive.company_id)
     resumes = [resumes_by_application_id[a.id] for a in valid_applications]
 
+    # Ranking must use the same canonical formula as screening, including the
+    # 10% assessment component. Applications store the score keyed by drive, so
+    # map it onto the candidate id used by the scorer (the resume id).
+    has_assessment = bool(drive.required_assessment_id)
+    assessment_scores = {
+        a.resume_id: a.assessment_score_pct
+        for a in valid_applications
+        if getattr(a, "assessment_score_pct", None) is not None
+    }
+
     try:
-        results = await MatchingService(db).rank_resumes_for_drive(drive, company_name, resumes)
+        results = await MatchingService(db).rank_resumes_for_drive(
+            drive,
+            company_name,
+            resumes,
+            assessment_scores_by_resume_id=assessment_scores,
+            has_assessment=has_assessment,
+        )
     except MatchingUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 

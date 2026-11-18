@@ -36,3 +36,5 @@ services:
         condition: service_healthy
     volumes:
       - ./backend/app:/app/app
+      # Uploaded resume files (referenced by local:// URLs in MongoDB).
+      - ./backend/storage:/app/storage

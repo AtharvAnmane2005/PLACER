@@ -18,6 +18,7 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.ml.llm.client import llm_client
 from app.ml.llm.exceptions import LLMUnavailableError
 from app.ml.rag.knowledge_store import KnowledgeStore
+from app.repositories.application_repository import ApplicationRepository
 from app.repositories.company_repository import CompanyRepository
 from app.repositories.drive_repository import PlacementDriveRepository
 from app.repositories.resume_repository import ResumeRepository
@@ -50,6 +51,7 @@ class JDExplanationService:
         self.resumes = ResumeRepository(db)
         self.drives = PlacementDriveRepository(db)
         self.companies = CompanyRepository(db)
+        self.applications = ApplicationRepository(db)
 
     async def explain(self, resume_id: str, drive_id: str) -> JDExplanationResult:
         resume = await self.resumes.get_by_id(resume_id)
@@ -63,11 +65,24 @@ class JDExplanationService:
         company = await self.companies.get_by_id(drive.company_id)
         company_name = company.name if company else "the company"
 
-        # Reuse existing, untouched matching logic — every number here is
-        # already traceable to a specific computation in matching_service.
-        # Returns a dict: {final_score, semantic_score, skills_score,
-        # experience_score, matched_skills, missing_skills}.
-        breakdown = await self.matching.score_resume_against_drive(resume, drive, company_name)
+        # Reuse the canonical matching logic — every number here is traceable
+        # to compute_final_score(). If this drive requires an assessment and
+        # the student has one on file, include its 10% component so the
+        # explanation matches the score actually used for screening.
+        application = await self.applications.get_existing(drive.id, resume.student_id)
+        has_assessment = bool(drive.required_assessment_id)
+        assessment_score_pct = (
+            application.assessment_score_pct
+            if application is not None and getattr(application, "assessment_score_pct", None) is not None
+            else None
+        )
+        breakdown = await self.matching.score_resume_against_drive(
+            resume,
+            drive,
+            company_name,
+            assessment_score_pct=assessment_score_pct,
+            has_assessment=has_assessment,
+        )
 
         missing_skills = breakdown.get("missing_skills", [])
         chunks = []
@@ -84,6 +99,11 @@ class JDExplanationService:
                 "semantic_score": round(breakdown["semantic_score"], 3),
                 "skills_score": round(breakdown["skills_score"], 3),
                 "experience_score": round(breakdown["experience_score"], 3),
+                # The canonical formula also has a 10% assessment component.
+                # Report exactly what was used; full credit means either no
+                # assessment is required or none has been recorded yet.
+                "assessment_score_pct": assessment_score_pct,
+                "assessment_required": has_assessment,
             },
             "matched_skills": breakdown.get("matched_skills", []),
             "missing_skills": missing_skills,

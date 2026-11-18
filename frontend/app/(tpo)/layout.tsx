@@ -51,6 +51,7 @@ export default function TpoDashboardLayout({ children }: { children: React.React
       displayName={user.email}
       initials={initialsFrom(undefined, user.email)}
       onLogout={handleLogout}
+      contentClassName="min-w-0"
     >
       {children}
     </DashboardShell>

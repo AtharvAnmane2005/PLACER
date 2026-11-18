@@ -15,11 +15,11 @@ import type {
 } from "@/types/market-analytics";
 
 /**
- * Phase 5 advanced company/family comparisons, kept in ONE dedicated
+ * Phase 5 advanced company/domain comparisons, kept in ONE dedicated
  * section at the bottom of the dashboard so the main analytics stay
  * uncluttered. Both tabs reuse the same comparison panel and the same
  * backend endpoint; the company tab requires at least two selections, the
- * family tab allows single-family inspection.
+ * domain tab allows single-domain inspection.
  */
 export function ComparisonSection({
   data,
@@ -64,6 +64,7 @@ export function ComparisonSection({
   );
 
   const postingFilters = {
+    source: filters.source,
     year_from: filters.year_from,
     year_to: filters.year_to,
     company: filters.company,
@@ -83,7 +84,7 @@ export function ComparisonSection({
               <Building2 className="mr-1.5 h-4 w-4" /> Companies
             </TabsTrigger>
             <TabsTrigger value="job-families">
-              <Layers className="mr-1.5 h-4 w-4" /> Job families
+              <Layers className="mr-1.5 h-4 w-4" /> Domains
             </TabsTrigger>
           </TabsList>
           <TabsContent value="companies">

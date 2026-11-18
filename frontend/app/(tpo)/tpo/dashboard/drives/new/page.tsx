@@ -7,12 +7,14 @@ import { z } from "zod";
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Combobox } from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { useAssessments } from "@/hooks/use-assessments";
 import { useCreateDrive } from "@/hooks/use-tpo-drives";
+import { DEPARTMENTS } from "@/lib/departments";
 
 const driveSchema = z.object({
   company_name: z.string().min(1, "Company name is required."),
@@ -37,7 +39,9 @@ const driveSchema = z.object({
   batch_years: z.string().optional(),
   deadline: z.string().min(1, "Deadline is required."),
   selection_process: z.string().optional(),
-  required_assessment_id: z.string().optional(),
+  required_assessment_id: z
+    .string()
+    .min(1, "An assessment is required before this placement drive can be published."),
   assessment_min_score_pct: z.preprocess(
     (v) => (v === "" || v === undefined ? undefined : v),
     z.coerce.number().min(0).max(100).optional()
@@ -90,7 +94,7 @@ export default function NewDrivePage() {
         },
         deadline: new Date(values.deadline).toISOString(),
         selection_process: splitCsv(values.selection_process),
-        required_assessment_id: values.required_assessment_id || undefined,
+        required_assessment_id: values.required_assessment_id,
         assessment_min_score_pct: values.assessment_min_score_pct,
         assessment_deadline: values.assessment_deadline ? new Date(values.assessment_deadline).toISOString() : undefined,
       });
@@ -115,7 +119,7 @@ export default function NewDrivePage() {
             <CardTitle>Company</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="company_name">Company name</Label>
                 <Input id="company_name" {...register("company_name")} />
@@ -175,7 +179,7 @@ export default function NewDrivePage() {
                 <p className="text-sm text-destructive">{errors.experience_required_years.message}</p>
               )}
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="package">Package</Label>
                 <Input id="package" placeholder="12 LPA" {...register("package")} />
@@ -208,7 +212,15 @@ export default function NewDrivePage() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="departments">Departments (comma-separated)</Label>
-              <Input id="departments" placeholder="CS, IT" {...register("departments")} />
+              <Combobox
+                id="departments"
+                options={DEPARTMENTS}
+                placeholder="Computer Science, Information Technology"
+                {...register("departments")}
+              />
+              <p className="text-xs text-muted-foreground">
+                Pick from the list or type a department. Separate multiple departments with commas.
+              </p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="batch_years">Batch years (comma-separated)</Label>
@@ -217,9 +229,10 @@ export default function NewDrivePage() {
           </CardContent>
 
           <CardHeader>
-            <CardTitle>Assessment Linkage (Optional)</CardTitle>
+            <CardTitle>Assessment Linkage</CardTitle>
             <CardDescription>
-              Require candidates to take an admin-created adaptive test before final shortlisting.
+              Every drive must be attached to an admin-created assessment before it can be published.
+              Candidates take this test before final shortlisting.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -230,16 +243,19 @@ export default function NewDrivePage() {
                 {...register("required_assessment_id")}
                 className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
               >
-                <option value="">No assessment required</option>
+                <option value="">Select an assessment…</option>
                 {assessments?.map((a) => (
                   <option key={a.id} value={a.id}>
                     {a.title} ({a.question_pool_size} questions, {Math.round(a.time_limit_sec / 60)} min)
                   </option>
                 ))}
               </select>
+              {errors.required_assessment_id && (
+                <p className="text-sm text-destructive">{errors.required_assessment_id.message}</p>
+              )}
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="assessment_min_score_pct">Passing Cutoff Score (%)</Label>
                 <Input

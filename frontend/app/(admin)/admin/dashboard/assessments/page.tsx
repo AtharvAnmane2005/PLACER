@@ -22,14 +22,16 @@ export default function AdminAssessmentsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="font-display text-2xl font-semibold">Assessments</h1>
-          <p className="text-sm text-muted-foreground">Adaptive assessments drawing from the question bank.</p>
+          <p className="text-sm text-muted-foreground">Adaptive and standardized assessments from the question bank.</p>
         </div>
-        <Button asChild>
-          <Link href="/admin/dashboard/assessments/new">
-            <PlusCircle className="mr-2 h-4 w-4" />
-            New assessment
-          </Link>
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button asChild>
+            <Link href="/admin/dashboard/assessments/new">
+              <PlusCircle className="mr-2 h-4 w-4" />
+              New assessment
+            </Link>
+          </Button>
+        </div>
       </div>
 
       {isLoading ? (
@@ -56,21 +58,30 @@ export default function AdminAssessmentsPage() {
               <CardHeader>
                 <div className="flex items-start justify-between gap-2">
                   <CardTitle className="text-base">{a.title}</CardTitle>
-                  <Badge variant={a.type === "drive" ? "default" : "secondary"} className="capitalize">
-                    {a.type}
-                  </Badge>
+                  <div className="flex gap-1">
+                    <Badge variant={a.type === "drive" ? "default" : "secondary"} className="capitalize">
+                      {a.type}
+                    </Badge>
+                    <Badge variant={a.format === "standardized" ? "success" : "outline"}>
+                      {a.format}
+                    </Badge>
+                    <Badge variant={a.status === "published" ? "secondary" : "warning"}>{a.status}</Badge>
+                  </div>
                 </div>
                 <CardDescription className="flex items-center gap-3">
                   <span className="flex items-center gap-1">
                     <Clock className="h-3.5 w-3.5" /> {formatMinutes(a.time_limit_sec)}
                   </span>
-                  <span>{a.question_pool_size} questions</span>
+                  <span>
+                    {a.format === "standardized" ? `${a.question_count || 20} fixed questions` : `${a.question_pool_size} questions`}
+                  </span>
                 </CardDescription>
               </CardHeader>
               <CardContent className="text-sm text-muted-foreground">
                 {a.category_ids.length} categor{a.category_ids.length === 1 ? "y" : "ies"} · Max{" "}
                 {a.anti_cheat_config.max_violations ?? "—"} violations
                 {a.anti_cheat_config.require_fullscreen && " · Fullscreen required"}
+                {a.format === "standardized" && ` · ${a.total_marks} marks · Passing ${a.passing_marks}`}
               </CardContent>
             </Card>
           ))}

@@ -3,6 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api-client";
 import type {
   AssessmentResponse,
+  AttemptQuestionsResponse,
   AttemptResultResponse,
   CodeRunSummary,
   FinishAttemptResponse,
@@ -53,6 +54,20 @@ export function useStudentKnowledgeStates(studentId: string | null) {
       return data;
     },
     enabled: Boolean(studentId),
+  });
+}
+
+/** Reload a standardized attempt's student-safe fixed question set. */
+export function useAttemptQuestions(attemptId: string | null) {
+  return useQuery({
+    queryKey: ["assessments", "attempts", attemptId, "questions"],
+    queryFn: async () => {
+      const { data } = await apiClient.get<AttemptQuestionsResponse>(
+        `/assessments/attempts/${attemptId}/questions`
+      );
+      return data;
+    },
+    enabled: Boolean(attemptId),
   });
 }
 

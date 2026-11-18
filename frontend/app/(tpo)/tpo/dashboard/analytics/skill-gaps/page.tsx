@@ -41,7 +41,7 @@ export default function SkillGapAnalysisPage() {
     isLoading: optionsLoading,
     isError: optionsError,
     refetch: refetchOptions,
-  } = useSkillGapFilterOptions();
+  } = useSkillGapFilterOptions(filters.source);
 
   const { data, isLoading, isError, refetch, isRefetching } = useSkillGaps(filters);
 
@@ -94,7 +94,7 @@ export default function SkillGapAnalysisPage() {
         <EmptyState
           icon={Puzzle}
           title="No skills match the current filters"
-          description="Try widening the year range or clearing the company / job-family / category filters."
+          description="Try widening the year range or clearing the company / domain / category filters."
         />
       </div>
     );

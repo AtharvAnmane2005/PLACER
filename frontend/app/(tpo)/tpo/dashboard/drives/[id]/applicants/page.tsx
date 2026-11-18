@@ -46,7 +46,8 @@ import {
   useTriggerScreening,
   useUpdateApplicationStatus,
 } from "@/hooks/use-tpo-drives";
-import type { ApplicationStatus } from "@/types/drive";
+import { categoryColor } from "@/lib/chart-theme";
+import type { ApplicationStatus, ManagedApplicationStatus } from "@/types/drive";
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { dateStyle: "medium" });
@@ -54,10 +55,8 @@ function formatDate(iso: string): string {
 
 function statusVariant(status: ApplicationStatus): "success" | "destructive" | "secondary" | "outline" {
   switch (status) {
-    case "selected":
-      return "success";
     case "shortlisted":
-      return "outline";
+      return "success";
     case "rejected":
       return "destructive";
     default:
@@ -110,7 +109,11 @@ function ApplicantMastery({ studentId }: { studentId: string }) {
           <Badge variant="outline" className="w-28 shrink-0 justify-center truncate">
             {s.skill_tag}
           </Badge>
-          <Progress value={s.mastery_pct} className="flex-1" />
+          <Progress
+            value={s.mastery_pct}
+            className="flex-1"
+            indicatorStyle={{ backgroundColor: categoryColor(s.skill_tag) }}
+          />
           <span className="w-10 shrink-0 text-right text-sm text-muted-foreground">
             {Math.round(s.mastery_pct)}%
           </span>
@@ -190,7 +193,7 @@ export default function DriveApplicantsPage() {
     }
   };
 
-  const handleStatusChange = async (applicationId: string, status: ApplicationStatus) => {
+  const handleStatusChange = async (applicationId: string, status: ManagedApplicationStatus) => {
     if (status === "rejected") {
       setRejectingTarget({ id: applicationId, bulk: false });
       setSelectedReasons([]);
@@ -207,7 +210,7 @@ export default function DriveApplicantsPage() {
     }
   };
 
-  const handleBulkStatus = async (status: ApplicationStatus) => {
+  const handleBulkStatus = async (status: ManagedApplicationStatus) => {
     if (selectedAppIds.length === 0) return;
     if (status === "rejected") {
       setRejectingTarget({ id: "", bulk: true });
@@ -318,7 +321,6 @@ export default function DriveApplicantsPage() {
                   <SelectItem value="applied">Applied</SelectItem>
                   <SelectItem value="shortlisted">Shortlisted</SelectItem>
                   <SelectItem value="rejected">Rejected</SelectItem>
-                  <SelectItem value="selected">Selected</SelectItem>
                 </SelectContent>
               </Select>
 
@@ -376,7 +378,7 @@ export default function DriveApplicantsPage() {
               <span className="text-sm font-medium">
                 {selectedAppIds.length} candidate(s) selected
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <Button size="sm" variant="outline" onClick={() => handleBulkStatus("shortlisted")}>
                   Shortlist Selected
                 </Button>
@@ -424,7 +426,7 @@ export default function DriveApplicantsPage() {
               return (
                 <div key={applicant.id} className={isSelected ? "bg-muted/20" : ""}>
                   <div className="flex flex-wrap items-center justify-between gap-3 p-4">
-                    <div className="flex items-center gap-3">
+                    <div className="flex min-w-0 items-center gap-3">
                       <input
                         type="checkbox"
                         checked={isSelected}
@@ -433,23 +435,23 @@ export default function DriveApplicantsPage() {
                       />
                       <button
                         onClick={() => setExpandedId(expanded ? null : applicant.id)}
-                        className="flex items-center gap-2 text-left"
+                        className="flex min-w-0 items-center gap-2 text-left"
                       >
                         {expanded ? (
-                          <ChevronUp className="h-4 w-4 text-muted-foreground" />
+                          <ChevronUp className="h-4 w-4 shrink-0 text-muted-foreground" />
                         ) : (
-                          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
                         )}
-                        <div>
+                        <div className="min-w-0">
                           <div className="flex items-center gap-2">
-                            <p className="font-semibold text-base">{applicant.student_name}</p>
+                            <p className="break-words font-semibold text-base">{applicant.student_name}</p>
                             {applicant.eligibility_passed === false && (
-                              <Badge variant="destructive" className="text-xs">
+                              <Badge variant="destructive" className="shrink-0 text-xs">
                                 Ineligible
                               </Badge>
                             )}
                           </div>
-                          <p className="text-xs text-muted-foreground">
+                          <p className="break-words text-xs text-muted-foreground">
                             {applicant.student_department ?? "Department —"} · CGPA:{" "}
                             {applicant.student_cgpa ?? "N/A"} · Applied {formatDate(applicant.applied_at)}
                           </p>
@@ -487,7 +489,7 @@ export default function DriveApplicantsPage() {
                       {/* Status Dropdown */}
                       <Select
                         value={applicant.status}
-                        onValueChange={(value) => handleStatusChange(applicant.id, value as ApplicationStatus)}
+                        onValueChange={(value) => handleStatusChange(applicant.id, value as ManagedApplicationStatus)}
                       >
                         <SelectTrigger className="w-32 h-8 text-xs">
                           <SelectValue />
@@ -496,7 +498,6 @@ export default function DriveApplicantsPage() {
                           <SelectItem value="applied">Applied</SelectItem>
                           <SelectItem value="shortlisted">Shortlist</SelectItem>
                           <SelectItem value="rejected">Reject</SelectItem>
-                          <SelectItem value="selected">Select</SelectItem>
                         </SelectContent>
                       </Select>
                     </div>

@@ -13,6 +13,20 @@ For the detailed build history, architectural decisions, and known
 limitations, see [`PROJECT_PROGRESS.md`](./PROJECT_PROGRESS.md) — this
 README only covers "how do I get this running."
 
+## Documentation
+
+Comprehensive technical documentation lives in [`docs/`](./docs):
+
+- [`docs/PLACER_SYSTEM_ARCHITECTURE.mmd`](./docs/PLACER_SYSTEM_ARCHITECTURE.mmd) —
+  Mermaid diagrams: system architecture, ER/schema, data-flow, role workflows,
+  and the AI inference pipeline.
+- [`docs/PLACER_MATHEMATICAL_FORMULAS_AND_ALGORITHMS.md`](./docs/PLACER_MATHEMATICAL_FORMULAS_AND_ALGORITHMS.md) —
+  every implemented calculation (analytics, scoring, ranking, radar, matching,
+  the transformer model, RAG) with worked examples and a formula-to-code map.
+- [`docs/PLACER_SYSTEM_DESIGN_AND_DATA_FLOW.md`](./docs/PLACER_SYSTEM_DESIGN_AND_DATA_FLOW.md) —
+  end-to-end system design, the three role interfaces, data ingestion,
+  API reference, MongoDB lifecycle, deployment, and security.
+
 ---
 
 ## Prerequisites
@@ -96,7 +110,7 @@ an admin account — there's no public admin sign-up (by design).
 ```bash
 .venv\Scripts\python.exe -m pytest -v
 ```
-Should show **109 passed**. If the 5 tests in `test_matching.py` fail or
+Should show **328 passed**. If the tests in `test_matching.py` fail or
 error, double-check step 1 (the model weight files).
 
 ### Start the backend

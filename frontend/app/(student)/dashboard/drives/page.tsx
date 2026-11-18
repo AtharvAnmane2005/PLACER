@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Briefcase, MapPin, Sparkles, Filter } from "lucide-react";
+import { Briefcase, MapPin, Sparkles } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,35 +28,30 @@ export default function DrivesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <h1 className="font-display text-2xl font-semibold">Placement drives</h1>
           <p className="text-sm text-muted-foreground">Browse open drives and apply with your active resume.</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Button
             variant={statusFilter === "open" ? "default" : "outline"}
             size="sm"
             onClick={() => setStatusFilter("open")}
-            className="gap-1.5"
           >
-            <Filter className="h-3.5 w-3.5" />
             Open
           </Button>
           <Button
             variant={statusFilter === "closed" ? "default" : "outline"}
             size="sm"
             onClick={() => setStatusFilter("closed")}
-            className="gap-1.5"
           >
-            <Filter className="h-3.5 w-3.5" />
             Closed
           </Button>
           <Button
             variant={statusFilter === "all" ? "default" : "outline"}
             size="sm"
             onClick={() => setStatusFilter("all")}
-            className="gap-1.5"
           >
             All
           </Button>
@@ -69,20 +64,24 @@ export default function DrivesPage() {
             <Sparkles className="h-4 w-4" /> Recommended for you
           </h2>
           {recommendedLoading ? (
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               {Array.from({ length: 3 }).map((_, i) => (
                 <Skeleton key={i} className="h-32 w-full" />
               ))}
             </div>
           ) : (
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               {recommended!.map((rec) => (
-                <Link key={rec.drive_id} href={`/dashboard/drives/${rec.drive_id}`}>
+                <Link
+                  key={rec.drive_id}
+                  href={`/dashboard/drives/${rec.drive_id}`}
+                  className="block h-full"
+                >
                   <Card className="h-full border-primary transition-colors hover:border-primary">
                     <CardHeader>
                       <div className="flex items-start justify-between gap-2">
-                        <CardTitle className="text-base">{rec.job_title}</CardTitle>
-                        <Badge>{Math.round(rec.final_score * 100)}%</Badge>
+                        <CardTitle className="min-w-0 text-base">{rec.job_title}</CardTitle>
+                        <Badge className="shrink-0">{Math.round(rec.final_score * 100)}%</Badge>
                       </div>
                       <p className="text-sm text-muted-foreground">{rec.company_name}</p>
                     </CardHeader>
@@ -103,7 +102,7 @@ export default function DrivesPage() {
 
       <div>
         {isLoading ? (
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {Array.from({ length: 4 }).map((_, i) => (
             <Skeleton key={i} className="h-40 w-full" />
           ))}
@@ -111,16 +110,22 @@ export default function DrivesPage() {
       ) : !drives || drives.length === 0 ? (
         <EmptyState icon={Briefcase} title="No drives available" description="Check back later for new placement drives." />
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           {drives.map((drive) => {
             const closed = drive.status === "closed" || isPastDeadline(drive.deadline);
             return (
-              <Link key={drive.id} href={`/dashboard/drives/${drive.id}`}>
+              <Link
+                key={drive.id}
+                href={`/dashboard/drives/${drive.id}`}
+                className="block h-full"
+              >
                 <Card className="h-full transition-colors hover:border-primary">
                   <CardHeader>
                     <div className="flex items-start justify-between gap-2">
-                      <CardTitle className="text-base">{drive.job_title}</CardTitle>
-                      <Badge variant={closed ? "secondary" : "success"}>{closed ? "Closed" : "Open"}</Badge>
+                      <CardTitle className="min-w-0 text-base">{drive.job_title}</CardTitle>
+                      <Badge variant={closed ? "secondary" : "success"} className="shrink-0">
+                        {closed ? "Closed" : "Open"}
+                      </Badge>
                     </div>
                     <p className="text-sm text-muted-foreground">{drive.company.name}</p>
                   </CardHeader>

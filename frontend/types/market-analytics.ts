@@ -21,6 +21,21 @@ export interface MarketPeriodInfo {
   label: string;
 }
 
+/** Whether the figures are demo data, imported real postings, or both. */
+export type MarketDataOrigin = "mock" | "real" | "mixed";
+
+/** Provenance of one market-data source present in the dataset. */
+export interface MarketSourceInfo {
+  id: string;
+  label: string;
+  is_mock: boolean;
+  posting_count: number;
+  latest_posted_at: string | null;
+  imported_at: string | null;
+  license: string | null;
+  homepage: string | null;
+}
+
 export interface MarketMeta {
   source: string;
   dataset_version: string;
@@ -32,6 +47,10 @@ export interface MarketMeta {
   previous_period: MarketPeriodInfo | null;
   comparison_comparable: boolean;
   filtered_years: number[];
+  /** Exact source ids that produced the filtered figures. */
+  sources: string[];
+  data_origin: MarketDataOrigin;
+  latest_import_at: string | null;
 }
 
 export interface MarketSkillDemand {
@@ -68,8 +87,14 @@ export interface TrendingSkill {
 
 export interface YearlySkillDemand {
   year: number;
+  /** Calendar-year total (may be a full year while the latest year is partial). */
   posting_count: number;
+  /** Calendar-year demand share, matching `posting_count`. */
   demand_pct: number;
+  /** Postings inside the comparable window used by `yoy_growth_pct`. */
+  window_posting_count: number;
+  /** Demand share inside the comparable window used by `yoy_growth_pct`. */
+  window_demand_pct: number;
   yoy_growth_pct: number | null;
 }
 
@@ -115,10 +140,18 @@ export interface CompanyFilterOption {
 
 export interface MarketFiltersResponse {
   years: number[];
+  /** Capped list of companies (highest posting counts first). */
   companies: CompanyFilterOption[];
+  /** True number of distinct companies; may exceed `companies.length`. */
+  company_total: number;
   job_families: string[];
+  /** Capped list of locations (highest posting counts first). */
   locations: string[];
+  /** True number of distinct locations; may exceed `locations.length`. */
+  location_total: number;
   skill_categories: string[];
+  /** Every source present in the collection, for an honest source switch. */
+  sources: MarketSourceInfo[];
 }
 
 export interface MarketAnalyticsResponse {
@@ -133,6 +166,8 @@ export interface MarketAnalyticsResponse {
 
 /** Query parameters accepted by GET /api/v1/analytics/tpo/market. */
 export interface MarketAnalyticsParams {
+  /** "mock", "real", "all" or an exact source id; omitted = default group. */
+  source?: string;
   year_from?: number;
   year_to?: number;
   company?: string;
@@ -177,6 +212,8 @@ export interface MarketComparisonParams {
   dimension: ComparisonDimension;
   /** Comma-joined entity keys (company slugs or job-family names). */
   entities: string;
+  /** Same source group as the dashboard, so comparison matches the page. */
+  source?: string;
   year_from?: number;
   year_to?: number;
   /** Posting filter applied when dimension === "company". */

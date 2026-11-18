@@ -117,12 +117,15 @@ def _posting(external_id, year, month, company_name, company_slug, job_family, t
     }
 
 
+# Both years cover January-October, so the data-driven comparison window is
+# Jan-Oct (the same window the dashboard uses) rather than being shrunk by a
+# sparse previous year.
 POSTINGS = [
     _posting("mock-p1", 2025, 3, "Alpha Labs", "alpha-labs", "Software Engineering", ["Python"], ["Communication"]),
-    _posting("mock-p2", 2025, 5, "Beta Systems", "beta-systems", "Frontend Engineering", ["React"], ["Communication"]),
+    _posting("mock-p2", 2025, 10, "Beta Systems", "beta-systems", "Frontend Engineering", ["React"], ["Communication"]),
     _posting("mock-p3", 2026, 2, "Alpha Labs", "alpha-labs", "Software Engineering", ["Python", "React"], ["Communication"]),
     _posting("mock-p4", 2026, 6, "Beta Systems", "beta-systems", "Data & Analytics", ["Python"], ["Communication"]),
-    _posting("mock-p5", 2026, 8, "Gamma Corp", "gamma-corp", "Software Engineering", ["React"], ["Communication"]),
+    _posting("mock-p5", 2026, 10, "Gamma Corp", "gamma-corp", "Software Engineering", ["React"], ["Communication"]),
 ]
 
 

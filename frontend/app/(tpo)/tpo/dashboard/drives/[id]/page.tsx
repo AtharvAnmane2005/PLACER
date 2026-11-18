@@ -10,6 +10,7 @@ import { z } from "zod";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Combobox } from "@/components/ui/combobox";
 import {
   Dialog,
   DialogContent,
@@ -27,6 +28,7 @@ import { useToast } from "@/hooks/use-toast";
 import { useAssessments } from "@/hooks/use-assessments";
 import { useDriveDetail } from "@/hooks/use-drives";
 import { useDeleteDrive, useUpdateDrive } from "@/hooks/use-tpo-drives";
+import { DEPARTMENTS } from "@/lib/departments";
 
 const editSchema = z.object({
   job_title: z.string().min(1, "Job title is required."),
@@ -47,7 +49,9 @@ const editSchema = z.object({
   batch_years: z.string().optional(),
   deadline: z.string().min(1),
   selection_process: z.string().optional(),
-  required_assessment_id: z.string().optional(),
+  required_assessment_id: z
+    .string()
+    .min(1, "An assessment is required before this placement drive can be published."),
   assessment_min_score_pct: z.preprocess(
     (v) => (v === "" || v === undefined ? undefined : v),
     z.coerce.number().min(0).max(100).optional()
@@ -130,7 +134,7 @@ export default function TpoDriveDetailPage() {
         },
         deadline: new Date(values.deadline).toISOString(),
         selection_process: splitCsv(values.selection_process),
-        required_assessment_id: values.required_assessment_id || undefined,
+        required_assessment_id: values.required_assessment_id,
         assessment_min_score_pct: values.assessment_min_score_pct,
         assessment_deadline: values.assessment_deadline ? new Date(values.assessment_deadline).toISOString() : undefined,
       });
@@ -146,8 +150,11 @@ export default function TpoDriveDetailPage() {
     try {
       await updateDrive.mutateAsync({ status: drive.status === "open" ? "closed" : "open" });
       toast({ title: drive.status === "open" ? "Drive closed" : "Drive reopened" });
-    } catch {
-      toast({ title: "Couldn't update status", variant: "destructive" });
+    } catch (err: any) {
+      const detail =
+        err?.response?.data?.detail ??
+        "An assessment is required before this placement drive can be published.";
+      toast({ title: "Couldn't update status", description: detail, variant: "destructive" });
     }
   };
 
@@ -173,15 +180,15 @@ export default function TpoDriveDetailPage() {
 
   return (
     <div className="max-w-2xl space-y-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="min-w-0">
           <div className="mb-1 flex items-center gap-2">
             <Badge variant={drive.status === "open" ? "success" : "secondary"}>{drive.status}</Badge>
           </div>
-          <h1 className="font-display text-2xl font-semibold">{drive.job_title}</h1>
-          <p className="text-sm text-muted-foreground">{drive.company.name}</p>
+          <h1 className="break-words font-display text-2xl font-semibold">{drive.job_title}</h1>
+          <p className="truncate text-sm text-muted-foreground">{drive.company.name}</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <Button asChild variant="secondary" size="sm">
             <Link href={`/tpo/dashboard/drives/${driveId}/applicants`}>View applicants</Link>
           </Button>
@@ -250,7 +257,7 @@ export default function TpoDriveDetailPage() {
                 {...register("experience_required_years")}
               />
             </div>
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="package">Package</Label>
                 <Input id="package" {...register("package")} />
@@ -274,7 +281,15 @@ export default function TpoDriveDetailPage() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="departments">Departments (comma-separated)</Label>
-              <Input id="departments" {...register("departments")} />
+              <Combobox
+                id="departments"
+                options={DEPARTMENTS}
+                placeholder="Computer Science, Information Technology"
+                {...register("departments")}
+              />
+              <p className="text-xs text-muted-foreground">
+                Pick from the list or type a department. Separate multiple departments with commas.
+              </p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="batch_years">Batch years (comma-separated)</Label>
@@ -282,7 +297,10 @@ export default function TpoDriveDetailPage() {
             </div>
 
             <div className="pt-4 border-t border-border space-y-4">
-              <h3 className="font-semibold text-sm">Assessment Linkage (Optional)</h3>
+              <h3 className="font-semibold text-sm">Assessment Linkage</h3>
+              <p className="text-sm text-muted-foreground">
+                Every drive must be attached to an assessment before it can be published.
+              </p>
               <div className="space-y-2">
                 <Label htmlFor="required_assessment_id">Attached Assessment</Label>
                 <select
@@ -290,16 +308,19 @@ export default function TpoDriveDetailPage() {
                   {...register("required_assessment_id")}
                   className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
                 >
-                  <option value="">No assessment required</option>
+                  <option value="">Select an assessment…</option>
                   {assessments?.map((a) => (
                     <option key={a.id} value={a.id}>
                       {a.title} ({a.question_pool_size} questions, {Math.round(a.time_limit_sec / 60)} min)
                     </option>
                   ))}
                 </select>
+                {errors.required_assessment_id && (
+                  <p className="text-sm text-destructive">{errors.required_assessment_id.message}</p>
+                )}
               </div>
 
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
                   <Label htmlFor="assessment_min_score_pct">Cutoff Score (%)</Label>
                   <Input

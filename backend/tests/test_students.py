@@ -36,7 +36,7 @@ async def test_get_my_profile_returns_registration_fields(client):
     assert response.status_code == 200
     data = response.json()
     assert data["name"] == "Profile Student"
-    assert data["department"] == "CS"
+    assert data["department"] == "Computer Science"
     assert data["batch_year"] == 2026
     assert data["skills"] == []
     assert data["active_resume_id"] is None

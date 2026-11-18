@@ -238,13 +238,13 @@ async def test_observability_returns_snapshot_for_admin(client, mock_mongo):
     svc = AuthService(mock_mongo)
     await svc.register_admin(
         AdminRegisterRequest(
-            email="obs.admin@college.edu", password="Admin@12345", name="Obs Admin"
+            email="obs.admin@college.edu", password="StrongPass123", name="Obs Admin"
         )
     )
     token = (
         await client.post(
             "/api/v1/auth/login",
-            json={"email": "obs.admin@college.edu", "password": "Admin@12345"},
+            json={"email": "obs.admin@college.edu", "password": "StrongPass123"},
         )
     ).json()["access_token"]
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { AlertTriangle, CheckCircle2, Clock, Flag, Play, XCircle } from "lucide-react";
+import { AlertTriangle, ArrowLeft, ArrowRight, CheckCircle2, Clock, Flag, Play, XCircle } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -18,6 +18,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import {
+  useAttemptQuestions,
   useFinishAssessment,
   useReportViolation,
   useRunCode,
@@ -48,6 +49,7 @@ export default function TakeAssessmentPage() {
   const [autoSubmittedDialogOpen, setAutoSubmittedDialogOpen] = useState(false);
   const [finishDialogOpen, setFinishDialogOpen] = useState(false);
   const [codeRunResult, setCodeRunResult] = useState<CodeRunSummary | null>(null);
+  const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
 
   const questionStartRef = useRef<number>(Date.now());
   const lastViolationAtRef = useRef<Record<string, number>>({});
@@ -59,6 +61,9 @@ export default function TakeAssessmentPage() {
   const reportViolation = useReportViolation();
   const runCode = useRunCode();
   const finishAssessment = useFinishAssessment();
+
+  const isStandardized = attempt?.format === "standardized";
+  const attemptQuestions = useAttemptQuestions(isStandardized ? attemptId : null);
 
   // ---- Load attempt state (from sessionStorage, set by the "Start" action) ----
   useEffect(() => {
@@ -79,6 +84,27 @@ export default function TakeAssessmentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attemptId]);
 
+  // ---- Reload the immutable standardized question set from the server ----
+  // The payload is student-safe: no correct answers or explanations are sent.
+  useEffect(() => {
+    if (!isStandardized || !attemptQuestions.data) return;
+    const payload = attemptQuestions.data;
+    setAttempt((previous) => {
+      if (!previous) return previous;
+      const questions = payload.questions;
+      const activeIndex = Math.min(previous.activeIndex ?? 0, Math.max(0, questions.length - 1));
+      const updated: AttemptState = {
+        ...previous,
+        questions,
+        answeredQuestionIds: payload.answered_question_ids,
+        activeIndex,
+        currentQuestion: questions[activeIndex] ?? null,
+      };
+      saveAttemptState(attemptId, updated);
+      return updated;
+    });
+  }, [attemptQuestions.data, isStandardized, attemptId]);
+
   // ---- Reset editor state whenever the current question changes ----
   const currentQuestionId = attempt?.currentQuestion?.id;
   const currentQuestionType = attempt?.currentQuestion?.type;
@@ -86,12 +112,29 @@ export default function TakeAssessmentPage() {
 
   useEffect(() => {
     if (!currentQuestionId) return;
-    setSelectedOption("");
     setCodeRunResult(null);
-    setFreeTextResponse(currentQuestionType === "coding" ? currentStarterCode ?? "" : "");
     questionStartRef.current = Date.now();
+
+    if (isStandardized) {
+      // Revisit a question with the response the student already saved.
+      const saved = loadAttemptState(attemptId)?.answers?.[currentQuestionId] ?? "";
+      if (currentQuestionType === "multiple_select") {
+        setSelectedOptions(saved ? saved.split("|").filter(Boolean) : []);
+        setSelectedOption("");
+      } else if (currentQuestionType === "mcq" || currentQuestionType === "true_false") {
+        setSelectedOption(saved);
+        setSelectedOptions([]);
+      } else {
+        setFreeTextResponse(saved || (currentQuestionType === "coding" ? currentStarterCode ?? "" : ""));
+      }
+      return;
+    }
+
+    setSelectedOption("");
+    setSelectedOptions([]);
+    setFreeTextResponse(currentQuestionType === "coding" ? currentStarterCode ?? "" : "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentQuestionId]);
+  }, [currentQuestionId, isStandardized, attemptId]);
 
   const finishAttempt = useCallback(
     (reason: "completed" | "auto_submitted") => {
@@ -324,6 +367,81 @@ export default function TakeAssessmentPage() {
     }
   };
 
+  // ---- Standardized fixed-set helpers ----
+  const updateAttemptState = (updater: (previous: AttemptState) => AttemptState) => {
+    setAttempt((previous) => {
+      if (!previous) return previous;
+      const updated = updater(previous);
+      saveAttemptState(attemptId, updated);
+      return updated;
+    });
+  };
+
+  const goToQuestion = (index: number) => {
+    if (!attempt?.questions || index < 0 || index >= attempt.questions.length) return;
+    updateAttemptState((previous) => ({
+      ...previous,
+      activeIndex: index,
+      currentQuestion: previous.questions?.[index] ?? previous.currentQuestion,
+    }));
+  };
+
+  const handleSubmitStandardizedAnswer = async () => {
+    if (!attempt?.currentQuestion) return;
+    const question = attempt.currentQuestion;
+    const response =
+      question.type === "multiple_select"
+        ? selectedOptions.join("|")
+        : question.type === "mcq" || question.type === "true_false"
+          ? selectedOption
+          : freeTextResponse;
+
+    if (!response.trim()) {
+      toast({ title: "Answer required", description: "Choose or write an answer before saving." });
+      return;
+    }
+
+    const timeTakenSec = (Date.now() - questionStartRef.current) / 1000;
+    try {
+      const result = await submitAnswer.mutateAsync({
+        attemptId,
+        sessionToken: attempt.sessionToken,
+        questionId: question.id,
+        response,
+        timeTakenSec,
+      });
+      // Correctness is intentionally ignored here: students may change answers
+      // freely, and no answer key or explanation is revealed before submission.
+      const answered = result.answered_question_ids ?? [
+        ...new Set([...(attempt.answeredQuestionIds ?? []), question.id]),
+      ];
+      const answers = { ...(attempt.answers ?? {}), [question.id]: response };
+      const questions = attempt.questions ?? [];
+      const currentIndex = attempt.activeIndex ?? 0;
+      let nextIndex = questions.findIndex((item, index) => index > currentIndex && !answered.includes(item.id));
+      if (nextIndex < 0) {
+        nextIndex = questions.findIndex((item) => !answered.includes(item.id));
+      }
+      if (nextIndex < 0) nextIndex = currentIndex;
+
+      updateAttemptState((previous) => ({
+        ...previous,
+        answeredQuestionIds: answered,
+        answers,
+        activeIndex: nextIndex,
+        currentQuestion: questions[nextIndex] ?? previous.currentQuestion,
+      }));
+      setSelectedOption("");
+      setSelectedOptions([]);
+      setCodeRunResult(null);
+      questionStartRef.current = Date.now();
+      toast({ title: "Answer saved", description: "You can return to this question and change it before finishing." });
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail ?? "Couldn't save your answer. Please try again.";
+      toast({ title: "Save failed", description: detail, variant: "destructive" });
+    }
+  };
+
   const handleFinishAssessment = async () => {
     if (!attempt || finishAssessment.isPending) return;
     try {
@@ -390,6 +508,309 @@ export default function TakeAssessmentPage() {
   }
 
   const question = attempt.currentQuestion;
+  const fixedQuestions = attempt.questions ?? [];
+  const answeredQuestionIds = attempt.answeredQuestionIds ?? [];
+  const activeIndex = attempt.activeIndex ?? 0;
+  const currentResponse =
+    question?.type === "multiple_select"
+      ? selectedOptions.join("|")
+      : question?.type === "mcq" || question?.type === "true_false"
+        ? selectedOption
+        : freeTextResponse;
+
+  if (isStandardized) {
+    return (
+      <div className="mx-auto min-h-screen max-w-5xl space-y-4 p-4 lg:p-8">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <Badge variant="outline">Standardized</Badge>
+              <Badge variant="outline" className="capitalize">
+                {question?.difficulty ?? "—"}
+              </Badge>
+            </div>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Question {fixedQuestions.length === 0 ? 0 : activeIndex + 1} of {fixedQuestions.length} ·{" "}
+              {answeredQuestionIds.length} answered · {attempt.totalMarks ?? "—"} marks
+            </p>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5 text-sm font-medium">
+              <Clock className="h-4 w-4" />
+              {formatTime(secondsLeft)}
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setFinishDialogOpen(true)}
+              disabled={finishAssessment.isPending || submitAnswer.isPending || runCode.isPending}
+            >
+              <Flag className="h-4 w-4" /> Finish
+            </Button>
+          </div>
+        </div>
+
+        {attempt.instructions && (
+          <p className="rounded-md border border-border bg-secondary/40 px-3 py-2 text-xs text-muted-foreground">
+            {attempt.instructions}
+          </p>
+        )}
+
+        {violationBanner && (
+          <div className="flex items-center gap-2 rounded-md border border-destructive bg-secondary px-3 py-2 text-sm text-destructive">
+            <AlertTriangle className="h-4 w-4 shrink-0" /> {violationBanner}
+          </div>
+        )}
+
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm">Question palette</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-5 gap-2 sm:grid-cols-10">
+              {fixedQuestions.map((item, index) => {
+                const answered = answeredQuestionIds.includes(item.id);
+                const active = index === activeIndex;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => goToQuestion(index)}
+                    title={`Question ${index + 1} · ${item.difficulty}`}
+                    className={`relative h-10 rounded-md border text-sm font-medium transition-colors ${
+                      active
+                        ? "border-primary bg-primary text-primary-foreground"
+                        : answered
+                          ? "border-success bg-success/10 text-success"
+                          : "border-border hover:bg-secondary"
+                    }`}
+                  >
+                    {index + 1}
+                    {answered && <CheckCircle2 className="absolute right-0.5 top-0.5 h-3 w-3" />}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Green numbers are saved. You can revisit and change any answer until you finish.
+            </p>
+          </CardContent>
+        </Card>
+
+        {!question ? (
+          <Card>
+            <CardContent className="p-8 text-center text-sm text-muted-foreground">
+              No questions available — wrapping up your attempt…
+            </CardContent>
+          </Card>
+        ) : (
+          <Card>
+            <CardHeader>
+              <div className="flex items-start justify-between gap-2">
+                <CardTitle className="text-base font-normal leading-relaxed">{question.text}</CardTitle>
+                {question.type === "coding" && (
+                  <Badge variant="secondary" className="shrink-0 uppercase">
+                    {question.language ?? "code"}
+                  </Badge>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {(question.type === "mcq" || question.type === "multiple_select") && (
+                <div className="space-y-2">
+                  {question.options.map((option, index) => {
+                    const selected =
+                      question.type === "multiple_select"
+                        ? selectedOptions.includes(option)
+                        : selectedOption === option;
+                    return (
+                      <button
+                        key={`${option}-${index}`}
+                        type="button"
+                        onClick={() => {
+                          if (question.type === "multiple_select") {
+                            setSelectedOptions((current) =>
+                              current.includes(option)
+                                ? current.filter((item) => item !== option)
+                                : [...current, option]
+                            );
+                          } else {
+                            setSelectedOption(option);
+                          }
+                        }}
+                        className={`flex w-full items-center gap-3 rounded-md border px-4 py-2.5 text-left text-sm transition-colors ${
+                          selected ? "border-primary bg-secondary" : "border-border hover:bg-secondary/50"
+                        }`}
+                      >
+                        <span
+                          className={`flex h-4 w-4 shrink-0 items-center justify-center border ${
+                            question.type === "multiple_select" ? "rounded-sm" : "rounded-full"
+                          } ${selected ? "border-primary bg-primary" : "border-input"}`}
+                        >
+                          {selected && <CheckCircle2 className="h-3 w-3 text-primary-foreground" />}
+                        </span>
+                        {option}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {question.type === "true_false" && (
+                <div className="flex gap-2">
+                  {["True", "False"].map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => setSelectedOption(option)}
+                      className={`flex-1 rounded-md border px-4 py-2.5 text-sm transition-colors ${
+                        selectedOption === option
+                          ? "border-primary bg-secondary"
+                          : "border-border hover:bg-secondary/50"
+                      }`}
+                    >
+                      {option}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {question.type === "coding" && (
+                <>
+                  {question.visible_test_cases.length > 0 && (
+                    <div className="space-y-2">
+                      <p className="text-xs font-medium text-muted-foreground">Sample test cases</p>
+                      {question.visible_test_cases.map((testCase, index) => (
+                        <div key={index} className="grid grid-cols-1 gap-2 rounded-md border border-border p-3 text-xs sm:grid-cols-2">
+                          <div>
+                            <p className="mb-1 font-medium">Input</p>
+                            <pre className="whitespace-pre-wrap font-mono">{testCase.input || "(no input)"}</pre>
+                          </div>
+                          <div>
+                            <p className="mb-1 font-medium">Expected output</p>
+                            <pre className="whitespace-pre-wrap font-mono">
+                              {testCase.expected_output || "(no output)"}
+                            </pre>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <Textarea
+                    rows={12}
+                    spellCheck={false}
+                    value={freeTextResponse}
+                    onChange={(e) => {
+                      setFreeTextResponse(e.target.value);
+                      setCodeRunResult(null);
+                    }}
+                    className="font-mono text-sm"
+                    placeholder="Write your program here. Read from stdin and print to stdout."
+                  />
+                  <Button type="button" variant="secondary" onClick={handleRunCode} disabled={runCode.isPending || submitAnswer.isPending}>
+                    <Play className="mr-1.5 h-4 w-4" /> {runCode.isPending ? "Running…" : "Run sample tests"}
+                  </Button>
+                  {codeRunResult && (
+                    <div className="rounded-md border border-border p-3 text-xs">
+                      <p className="font-medium">
+                        {codeRunResult.passed}/{codeRunResult.total} visible tests passed
+                      </p>
+                      {codeRunResult.error && <p className="mt-1 text-destructive">{codeRunResult.error}</p>}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {question.type === "descriptive" && (
+                <Textarea
+                  rows={6}
+                  value={freeTextResponse}
+                  onChange={(e) => setFreeTextResponse(e.target.value)}
+                  placeholder="Write your answer here…"
+                />
+              )}
+
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border pt-4">
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => goToQuestion(activeIndex - 1)}
+                    disabled={activeIndex === 0}
+                  >
+                    <ArrowLeft className="mr-1 h-4 w-4" /> Previous
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => goToQuestion(activeIndex + 1)}
+                    disabled={activeIndex >= fixedQuestions.length - 1}
+                  >
+                    Next <ArrowRight className="ml-1 h-4 w-4" />
+                  </Button>
+                </div>
+                <Button
+                  type="button"
+                  onClick={handleSubmitStandardizedAnswer}
+                  disabled={!currentResponse.trim() || submitAnswer.isPending}
+                >
+                  {submitAnswer.isPending ? "Saving…" : "Save answer"}
+                </Button>
+              </div>
+              {answeredQuestionIds.includes(question.id) && (
+                <p className="flex items-center gap-1.5 text-xs text-success">
+                  <CheckCircle2 className="h-3.5 w-3.5" /> This answer is saved. You can change it before finishing.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        <Dialog open={finishDialogOpen} onOpenChange={setFinishDialogOpen}>
+          <DialogContent onInteractOutside={(e) => e.preventDefault()}>
+            <DialogHeader>
+              <DialogTitle>Finish this assessment?</DialogTitle>
+              <DialogDescription>
+                Your score will be based on the answers you have saved. Unanswered questions will be skipped, and
+                this attempt cannot be resumed.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setFinishDialogOpen(false)} disabled={finishAssessment.isPending}>
+                Keep going
+              </Button>
+              <Button variant="destructive" onClick={handleFinishAssessment} disabled={finishAssessment.isPending}>
+                {finishAssessment.isPending ? "Finishing…" : "Finish & see results"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        <Dialog
+          open={autoSubmittedDialogOpen}
+          onOpenChange={(open) => {
+            if (!open) router.replace(`/dashboard/assessments/results/${attemptId}`);
+          }}
+        >
+          <DialogContent onInteractOutside={(e) => e.preventDefault()}>
+            <DialogHeader>
+              <DialogTitle>Attempt auto-submitted</DialogTitle>
+              <DialogDescription>
+                This attempt was submitted automatically because the time limit expired or the anti-cheat violation
+                limit was reached. Your saved answers have been kept.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button onClick={() => router.replace(`/dashboard/assessments/results/${attemptId}`)}>View results</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto min-h-screen max-w-2xl space-y-4 p-4 lg:p-8">
@@ -481,7 +902,7 @@ export default function TakeAssessmentPage() {
                     {question.visible_test_cases.map((testCase, index) => (
                       <div
                         key={index}
-                        className="grid gap-2 rounded-md border border-border p-3 text-xs sm:grid-cols-2"
+                        className="grid grid-cols-1 gap-2 rounded-md border border-border p-3 text-xs sm:grid-cols-2"
                       >
                         <div>
                           <p className="mb-1 font-medium">Input</p>

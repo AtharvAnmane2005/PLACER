@@ -1,3 +1,5 @@
+from datetime import datetime
+
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.models.activity_log import ActivityLogInDB
@@ -29,6 +31,11 @@ async def log_activity(
                 "entity_id": entity_id,
                 "metadata": metadata or {},
                 "ip_address": ip_address,
+                # BaseRepository.create inserts the raw dict, so Pydantic
+                # defaults never run here. An audit row without a stored
+                # timestamp cannot answer "when did this happen" (and reads
+                # would silently substitute the current time).
+                "timestamp": datetime.utcnow(),
             }
         )
     except Exception:

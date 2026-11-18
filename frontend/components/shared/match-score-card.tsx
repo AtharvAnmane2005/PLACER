@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { formatRatioAsPercent } from "@/lib/format";
 import type { MatchScoreBreakdown } from "@/types/matching";
 
 export function MatchScoreCard({
@@ -27,7 +28,7 @@ export function MatchScoreCard({
     return <Skeleton className="h-40 w-full" />;
   }
 
-  const pct = Math.round(score.final_score * 100);
+  const pct = score.final_score * 100;
 
   return (
     <Card>
@@ -41,23 +42,23 @@ export function MatchScoreCard({
         <div>
           <div className="mb-1 flex items-center justify-between text-sm">
             <span className="text-muted-foreground">Overall match</span>
-            <span className="font-semibold">{pct}%</span>
+            <span className="font-semibold">{formatRatioAsPercent(score.final_score)}</span>
           </div>
           <Progress value={pct} />
         </div>
 
-        <div className="grid grid-cols-3 gap-3 text-center text-xs">
+        <div className="grid grid-cols-1 gap-3 text-center text-xs sm:grid-cols-3">
           <div>
             <p className="text-muted-foreground">Semantic fit</p>
-            <p className="font-medium">{Math.round(score.semantic_score * 100)}%</p>
+            <p className="font-medium">{formatRatioAsPercent(score.semantic_score)}</p>
           </div>
           <div>
             <p className="text-muted-foreground">Skills</p>
-            <p className="font-medium">{Math.round(score.skills_score * 100)}%</p>
+            <p className="font-medium">{formatRatioAsPercent(score.skills_score)}</p>
           </div>
           <div>
             <p className="text-muted-foreground">Experience</p>
-            <p className="font-medium">{Math.round(score.experience_score * 100)}%</p>
+            <p className="font-medium">{formatRatioAsPercent(score.experience_score)}</p>
           </div>
         </div>
 

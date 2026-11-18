@@ -36,7 +36,7 @@ export default function MarketInsightsPage() {
   const [filters, setFilters] = useState<MarketFiltersState>({ ...DEFAULT_MARKET_FILTERS });
 
   const analytics = useMarketAnalytics(filters);
-  const filterOptions = useMarketFilters();
+  const filterOptions = useMarketFilters(filters.source);
 
   const data = analytics.data;
   const meta = data?.meta;
@@ -105,7 +105,7 @@ export default function MarketInsightsPage() {
               </p>
             )}
 
-            <MarketSummaryCards summary={data.summary} isLoading={false} />
+            <MarketSummaryCards summary={data.summary} meta={meta} isLoading={false} />
 
             <TrendingSkillsSection
               skills={data.trending_skills}
@@ -130,7 +130,11 @@ export default function MarketInsightsPage() {
               isLoading={false}
             />
 
-            <CompanyAnalyticsSection companies={data.companies} isLoading={false} />
+            <CompanyAnalyticsSection
+              companies={data.companies}
+              companyTotal={data.summary.company_count}
+              isLoading={false}
+            />
 
             <JobFamilySection families={data.job_families} isLoading={false} />
 

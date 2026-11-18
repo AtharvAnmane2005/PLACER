@@ -28,8 +28,11 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.models.assessment import (
     DIFFICULTY_MARKS,
     DIFFICULTY_ORDER,
+    OBJECTIVE_QUESTION_TYPES,
     AssessmentAttemptInDB,
+    AssessmentFormat,
     AssessmentInDB,
+    AssessmentPublishStatus,
     AttemptStatus,
     CodeRunSummary,
     DifficultyLevel,
@@ -95,6 +98,15 @@ def _effective_test_cases(question: QuestionInDB) -> list[TestCase]:
 def _grade(question: QuestionInDB, response: str) -> bool | None:
     if question.type == QuestionType.MCQ:
         return response.strip() == (question.correct_answer or "").strip()
+    if question.type == QuestionType.TRUE_FALSE:
+        return response.strip().lower() == (question.correct_answer or "").strip().lower()
+    if question.type == QuestionType.MULTIPLE_SELECT:
+        # ``correct_answer`` is stored as option texts joined by "|" in the
+        # administrator's chosen order. The student sends their selection in
+        # the same format; order is deliberately ignored (a set comparison).
+        expected = {part.strip() for part in (question.correct_answer or "").split("|") if part.strip()}
+        given = {part.strip() for part in response.split("|") if part.strip()}
+        return bool(expected) and expected == given
     return None  # coding is graded by executing test cases; descriptive is manual review
 
 
@@ -124,6 +136,26 @@ class AssessmentService:
             raise AssessmentError("Student profile not found.", 404)
         return student.id
 
+    @staticmethod
+    def _is_standardized(assessment: AssessmentInDB) -> bool:
+        """Only assessments with a stored fixed set use the standardized path."""
+        return assessment.format == AssessmentFormat.STANDARDIZED and bool(assessment.question_ids)
+
+    async def _ordered_questions(self, assessment: AssessmentInDB) -> list[QuestionInDB]:
+        """Return the assessment's fixed questions in their stored order."""
+        return await self.questions.find_by_ids(assessment.question_ids)
+
+    async def get_fixed_questions(self, assessment_id: str) -> list[QuestionStudentView]:
+        """Student-safe ordered questions for a standardized attempt."""
+        assessment = await self.assessments.get_by_id(assessment_id)
+        if not assessment or not self._is_standardized(assessment):
+            return []
+        return [to_student_view(q) for q in await self._ordered_questions(assessment)]
+
+    @staticmethod
+    def answered_ids(attempt: AssessmentAttemptInDB) -> list[str]:
+        return [a.question_id for a in attempt.answers]
+
     async def start_attempt(
         self,
         student_user_id: str,
@@ -137,6 +169,24 @@ class AssessmentService:
         assessment = await self.assessments.get_by_id(assessment_id)
         if not assessment:
             raise AssessmentError("Assessment not found.", 404)
+
+        is_standardized = self._is_standardized(assessment)
+        if is_standardized:
+            if assessment.status == AssessmentPublishStatus.DRAFT:
+                raise AssessmentError("This assessment is not published yet.", 403)
+            if not assessment.allow_retake:
+                previous = await self.attempts.find_many(
+                    {
+                        "assessment_id": assessment.id,
+                        "student_id": student_id,
+                        "status": AttemptStatus.SUBMITTED.value,
+                    },
+                    limit=1,
+                )
+                if previous:
+                    raise AssessmentError(
+                        "You have already submitted this assessment and retakes are not allowed.", 403
+                    )
 
         # A drive-linked assessment (drive_id set) enforces application
         # linkage and drive rules. Practice assessments are never linked to a
@@ -184,6 +234,17 @@ class AssessmentService:
                     if existing_attempt.current_question_id
                     else None
                 )
+                if is_standardized:
+                    # Fixed-set attempts navigate freely, so "current" simply
+                    # means the first unanswered question in the stored order.
+                    answered = set(self.answered_ids(existing_attempt))
+                    ordered = await self._ordered_questions(assessment)
+                    remaining = [q for q in ordered if q.id not in answered]
+                    current_question = remaining[0] if remaining else (ordered[0] if ordered else None)
+                    if current_question and existing_attempt.current_question_id != current_question.id:
+                        await self.attempts.update_by_id(
+                            existing_attempt.id, {"current_question_id": current_question.id}
+                        )
                 if current_question:
                     if application and application.assessment_attempt_id != existing_attempt.id:
                         await self.applications.update_by_id(
@@ -211,41 +272,55 @@ class AssessmentService:
             # before starting a fresh one so it cannot linger forever.
             await self._finalize_attempt(existing_attempt)
 
-        first_difficulty = DifficultyLevel.MEDIUM
-        first_question = await self.questions.get_random_unused(
-            category_ids=assessment.category_ids,
-            difficulty=first_difficulty.value,
-            exclude_ids=[],
-        )
-        if not first_question:
-            # Question banks don't have to contain a medium-difficulty item in
-            # every category (the common case is a category with only easy
-            # questions, e.g. a single coding problem). Fall back to the other
-            # levels instead of refusing to start the assessment.
-            for fallback_difficulty in DIFFICULTY_ORDER:
-                if fallback_difficulty == first_difficulty:
-                    continue
-                first_question = await self.questions.get_random_unused(
-                    category_ids=assessment.category_ids,
-                    difficulty=fallback_difficulty.value,
-                    exclude_ids=[],
+        if is_standardized:
+            # Every student receives the identical ordered set that was fixed
+            # at generation time — no per-student randomness or regeneration.
+            ordered = await self._ordered_questions(assessment)
+            if len(ordered) != len(assessment.question_ids) or not ordered:
+                raise AssessmentError(
+                    "This assessment's fixed question set is incomplete. Contact your administrator.",
+                    422,
                 )
-                if first_question:
-                    first_difficulty = fallback_difficulty
-                    break
-        if not first_question:
-            raise AssessmentError(
-                "No questions available for this assessment yet. "
-                "Add at least one question to the categories selected for this assessment.",
-                422,
+            first_question = ordered[0]
+            first_difficulty = first_question.difficulty
+            asked_ids = list(assessment.question_ids)
+        else:
+            first_difficulty = DifficultyLevel.MEDIUM
+            first_question = await self.questions.get_random_unused(
+                category_ids=assessment.category_ids,
+                difficulty=first_difficulty.value,
+                exclude_ids=[],
             )
+            if not first_question:
+                # Question banks don't have to contain a medium-difficulty item
+                # in every category (the common case is a category with only
+                # easy questions, e.g. a single coding problem). Fall back to
+                # the other levels instead of refusing to start the assessment.
+                for fallback_difficulty in DIFFICULTY_ORDER:
+                    if fallback_difficulty == first_difficulty:
+                        continue
+                    first_question = await self.questions.get_random_unused(
+                        category_ids=assessment.category_ids,
+                        difficulty=fallback_difficulty.value,
+                        exclude_ids=[],
+                    )
+                    if first_question:
+                        first_difficulty = fallback_difficulty
+                        break
+            if not first_question:
+                raise AssessmentError(
+                    "No questions available for this assessment yet. "
+                    "Add at least one question to the categories selected for this assessment.",
+                    422,
+                )
+            asked_ids = [first_question.id]
 
         attempt = await self.attempts.create(
             {
                 "assessment_id": assessment.id,
                 "student_id": student_id,
                 "session_token": secrets.token_urlsafe(24),
-                "asked_question_ids": [first_question.id],
+                "asked_question_ids": asked_ids,
                 "current_question_id": first_question.id,
                 "current_difficulty": first_difficulty.value,
                 "answers": [],
@@ -317,9 +392,17 @@ class AssessmentService:
         if not updated_attempt:
             return attempt
 
-        # Calculate score percentage
+        assessment = await self.assessments.get_by_id(updated_attempt.assessment_id)
+        standardized = assessment is not None and self._is_standardized(assessment)
+
+        # Calculate score percentage. Standardized assessments use their
+        # configured total marks (and clamp negative-marking results at zero),
+        # while adaptive attempts keep the difficulty-derived maximum.
         total_marks = sum(a.marks_awarded for a in updated_attempt.answers)
         max_marks = sum(DIFFICULTY_MARKS[a.difficulty_at_time] for a in updated_attempt.answers)
+        if standardized and assessment is not None:
+            max_marks = assessment.total_marks or max_marks
+            total_marks = max(0.0, min(float(total_marks), float(max_marks)))
         score_pct = round(100.0 * total_marks / max_marks, 1) if max_marks > 0 else 0.0
 
         # Check if an application is linked to this attempt. One attempt can in
@@ -335,6 +418,9 @@ class AssessmentService:
             pass_status = AssessmentStatus.PASSED.value
             if drive and drive.assessment_min_score_pct is not None:
                 if score_pct < drive.assessment_min_score_pct:
+                    pass_status = AssessmentStatus.FAILED.value
+            elif standardized and assessment is not None and assessment.passing_marks:
+                if total_marks < assessment.passing_marks:
                     pass_status = AssessmentStatus.FAILED.value
 
             await self.applications.update_by_id(
@@ -359,12 +445,19 @@ class AssessmentService:
         question_id: str,
         response: str,
         time_taken_sec: float | None,
-    ) -> tuple[AssessmentAttemptInDB, QuestionInDB | None, bool | None, int, CodeRunSummary | None]:
+    ) -> tuple[AssessmentAttemptInDB, QuestionInDB | None, bool | None, float, CodeRunSummary | None]:
         student_id = await self._resolve_student_id(student_user_id)
         attempt, assessment = await self._require_in_progress_attempt(student_id, attempt_id, session_token)
 
-        if attempt.current_question_id != question_id:
-            raise AssessmentError("This is not the current question for this attempt.", 400)
+        standardized = self._is_standardized(assessment)
+        if standardized:
+            if question_id not in assessment.question_ids:
+                raise AssessmentError("This question is not part of this assessment.", 400)
+            is_change = any(a.question_id == question_id for a in attempt.answers)
+        else:
+            if attempt.current_question_id != question_id:
+                raise AssessmentError("This is not the current question for this attempt.", 400)
+            is_change = False
 
         question = await self.questions.get_by_id(question_id)
         if not question:
@@ -386,7 +479,11 @@ class AssessmentService:
         else:
             is_correct = _grade(question, response)
 
-        marks_awarded = question.marks if is_correct else 0
+        marks_awarded: float = question.marks if is_correct else 0
+        if is_correct is False and standardized:
+            # Negative marking applies only to wrong, auto-gradable answers on
+            # standardized assessments. Ungraded (descriptive) answers are None.
+            marks_awarded = -abs(assessment.negative_marks)
 
         if time_taken_sec is not None and time_taken_sec < 3.0:
             await log_activity(
@@ -398,7 +495,9 @@ class AssessmentService:
                 metadata={"question_id": question_id, "time_taken_sec": time_taken_sec},
             )
 
-        if is_correct is not None:
+        if is_correct is not None and not is_change:
+            # A revised answer replaces the earlier record; don't double-count
+            # it in knowledge tracing.
             for skill_tag in question.skill_tags:
                 await self.kts.update_mastery(student_id, skill_tag, is_correct, question.difficulty)
 
@@ -412,7 +511,23 @@ class AssessmentService:
             "question_type": question.type.value,
             "code_result": code_result.model_dump() if code_result else None,
         }
-        new_answers = [a.model_dump(mode="json") for a in attempt.answers] + [answer_record]
+        new_answers = [a.model_dump(mode="json") for a in attempt.answers]
+        if standardized:
+            # Answers may be changed before submission: keep one record per
+            # question rather than appending duplicates.
+            new_answers = [a for a in new_answers if a["question_id"] != question_id]
+        new_answers.append(answer_record)
+
+        if standardized:
+            # The fixed set can be answered in any order and is finalized only
+            # by finish / timeout / violation threshold — never per question.
+            update_data: dict = {"answers": new_answers}
+            answered = {a["question_id"] for a in new_answers}
+            remaining = [qid for qid in assessment.question_ids if qid not in answered]
+            if remaining:
+                update_data["current_question_id"] = remaining[0]
+            updated_attempt = await self.attempts.update_by_id(attempt.id, update_data)
+            return updated_attempt, None, is_correct, marks_awarded, code_result
 
         pool_exhausted = len(new_answers) >= assessment.question_pool_size
         next_question = None
@@ -485,9 +600,12 @@ class AssessmentService:
         hidden expectations.
         """
         student_id = await self._resolve_student_id(student_user_id)
-        attempt, _ = await self._require_in_progress_attempt(student_id, attempt_id, session_token)
+        attempt, assessment = await self._require_in_progress_attempt(student_id, attempt_id, session_token)
 
-        if attempt.current_question_id != question_id:
+        if self._is_standardized(assessment):
+            if question_id not in assessment.question_ids:
+                raise AssessmentError("This question is not part of this assessment.", 400)
+        elif attempt.current_question_id != question_id:
             raise AssessmentError("This is not the current question for this attempt.", 400)
 
         question = await self.questions.get_by_id(question_id)

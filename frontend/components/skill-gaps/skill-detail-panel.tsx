@@ -5,6 +5,7 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
+  Cell,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -14,14 +15,54 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ChartTooltipCard } from "@/components/shared/chart-ui";
+import {
+  CHART_AXIS_STYLE,
+  CHART_GRID_STROKE,
+  CHART_TOOLTIP_STYLE,
+  chartAxisLabel,
+  sequentialColor,
+} from "@/lib/chart-theme";
+import { formatSignedGrowth } from "@/lib/market-insights";
 import type { SkillGapEntry } from "@/types/skill-gaps";
 
 /**
  * Detail view for ONE selected skill: industry demand (companies, job
- * families, year-wise series) and the student evidence breakdown. All
+ * domains, year-wise series) and the student evidence breakdown. All
  * numbers come from the backend; the evidence classes are the documented
  * classifications, so the tooltip text states them verbatim.
  */
+function YearDemandTooltip({
+  active,
+  payload,
+  colorByYear,
+}: {
+  active?: boolean;
+  payload?: Array<{ payload?: { year?: string; "Postings requiring the skill"?: number; "Growth vs previous period"?: number | null } }>;
+  colorByYear: Map<string, string>;
+}) {
+  const point = payload?.[0]?.payload;
+  if (!active || !point || !point.year) return null;
+  const growth = point["Growth vs previous period"];
+  return (
+    <ChartTooltipCard
+      title={point.year}
+      rows={[
+        {
+          label: "Postings requiring the skill",
+          value: String(point["Postings requiring the skill"] ?? "—"),
+          color: colorByYear.get(point.year),
+        },
+      ]}
+      footer={
+        growth == null
+          ? "No comparable previous period"
+          : `${formatSignedGrowth(growth)} vs the previous comparable window`
+      }
+    />
+  );
+}
+
 export function SkillDetailPanel({
   skill,
   onClose,
@@ -36,6 +77,9 @@ export function SkillDetailPanel({
     "Postings requiring the skill": year.posting_count,
     "Growth vs previous period": year.yoy_growth_pct,
   }));
+  const yearColorByName = new Map<string, string>(
+    yearData.map((row, index) => [row.year, sequentialColor(index, yearData.length)] as const)
+  );
 
   return (
     <Card>
@@ -65,7 +109,7 @@ export function SkillDetailPanel({
               {skill.posting_count} posting{skill.posting_count === 1 ? "" : "s"} ·{" "}
               {skill.demand_pct}% of filtered postings · growth{" "}
               {skill.growth_comparable && skill.latest_growth_pct != null
-                ? `${skill.latest_growth_pct > 0 ? "+" : ""}${skill.latest_growth_pct}%`
+                ? formatSignedGrowth(skill.latest_growth_pct)
                 : "N/A"}
             </CardDescription>
           </div>
@@ -122,23 +166,35 @@ export function SkillDetailPanel({
         {yearData.length > 0 && (
           <div>
             <h4 className="mb-2 text-sm font-semibold">Year-wise demand</h4>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={yearData} margin={{ top: 8, right: 8, left: -24, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="year" tick={{ fontSize: 12 }} />
-                <YAxis allowDecimals={false} tick={{ fontSize: 12 }} />
-                <Tooltip />
-                <Bar
-                  dataKey="Postings requiring the skill"
-                  fill="#6366f1"
-                  radius={[4, 4, 0, 0]}
-                />
-              </BarChart>
-            </ResponsiveContainer>
+            <p className="mb-2 text-xs text-muted-foreground">
+              Sequential teal-to-cyan shading follows the year order; values are unchanged.
+            </p>
+            <div role="img" aria-label={`Year-wise postings requiring ${skill.name}`}>
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={yearData} margin={{ top: 8, right: 8, left: -24, bottom: 0 }}>
+                  <CartesianGrid stroke={CHART_GRID_STROKE} strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="year" tick={CHART_AXIS_STYLE} label={chartAxisLabel("Year")} />
+                  <YAxis
+                    allowDecimals={false}
+                    tick={CHART_AXIS_STYLE}
+                    label={chartAxisLabel("Postings", "insideLeft")}
+                  />
+                  <Tooltip
+                    content={<YearDemandTooltip colorByYear={yearColorByName} />}
+                    contentStyle={CHART_TOOLTIP_STYLE}
+                  />
+                  <Bar dataKey="Postings requiring the skill" radius={[4, 4, 0, 0]}>
+                    {yearData.map((row) => (
+                      <Cell key={row.year} fill={yearColorByName.get(row.year)} />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </div>
         )}
 
-        {/* --- Company + job family demand --- */}
+        {/* --- Company + domain demand --- */}
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <CompanyDemandList
             title="Company demand"
@@ -152,7 +208,7 @@ export function SkillDetailPanel({
             emptyText="No filtered company demands this skill."
           />
           <CompanyDemandList
-            title="Job-family demand"
+            title="Domain demand"
             icon={<Layers className="h-4 w-4" />}
             rows={skill.top_job_families.map((family) => ({
               key: family.job_family,
@@ -160,7 +216,7 @@ export function SkillDetailPanel({
               count: family.posting_count,
               pct: family.demand_pct,
             }))}
-            emptyText="No filtered job family demands this skill."
+            emptyText="No filtered domain demands this skill."
           />
         </div>
       </CardContent>
@@ -196,7 +252,7 @@ function CompanyDemandList({
 }: {
   title: string;
   icon: React.ReactNode;
-  rows: { key: string; label: string; count: number; pct: number }[];
+  rows: { key: string; label: string; count: number; pct: number; color?: string }[];
   emptyText: string;
 }) {
   return (
@@ -213,7 +269,9 @@ function CompanyDemandList({
               key={row.key}
               className="flex items-center justify-between gap-2 rounded-md border px-3 py-1.5 text-sm"
             >
-              <span className="truncate">{row.label}</span>
+              <span className="flex min-w-0 items-center gap-1.5 truncate">
+                {row.label}
+              </span>
               <span className="shrink-0 text-muted-foreground">
                 {row.count} posting{row.count === 1 ? "" : "s"} ({row.pct}%)
               </span>

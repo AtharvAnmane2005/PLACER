@@ -1,5 +1,11 @@
 export type DriveStatus = "open" | "closed";
+/**
+ * Includes legacy `selected` so old records still type-check when read.
+ * `selected` is never settable: the TPO workflow manages only
+ * `ManagedApplicationStatus` values.
+ */
 export type ApplicationStatus = "applied" | "shortlisted" | "rejected" | "selected";
+export type ManagedApplicationStatus = "applied" | "shortlisted" | "rejected";
 export type AssessmentStatus = "not_required" | "pending" | "passed" | "failed" | "expired";
 
 export type RejectionReason =
@@ -69,6 +75,9 @@ export interface ApplicationResponse {
   rejection_reasons?: string[];
   rejection_note?: string | null;
   decision_at?: string | null;
+  /** Provenance — flagged demo rows must be visibly marked in the UI. */
+  data_origin?: string;
+  is_synthetic?: boolean;
 }
 
 export interface ApplicationDetail extends ApplicationResponse {
@@ -117,7 +126,7 @@ export interface DriveUpdateRequest {
 
 export interface BulkApplicationStatusRequest {
   application_ids: string[];
-  status: ApplicationStatus;
+  status: ManagedApplicationStatus;
   rejection_reasons?: string[];
   rejection_note?: string | null;
 }
@@ -139,6 +148,5 @@ export interface ScreeningSummary {
   assessment_not_required: number;
   shortlisted: number;
   rejected: number;
-  selected: number;
   recommended_shortlist: number;
 }

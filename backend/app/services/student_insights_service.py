@@ -83,6 +83,10 @@ _SYSTEM_PROMPT = (
     "Write 150-220 words covering, in order: (1) the single highest-priority "
     "skill to fix and why it's first, (2) the next one or two, (3) a concrete "
     "study routine they can follow this week.\n\n"
+    "Format the answer in clean Markdown: a short `##` heading, **bold** for "
+    "skill names and key numbers, and `-` bullet lists for the plan. Use short "
+    "paragraphs and a blank line between blocks. Do not use tables, HTML, "
+    "code blocks, or fenced code.\n\n"
     "Rules: never invent a skill, question, or fact that is not in the data "
     "given to you; never state a mastery number different from the one "
     "provided; be specific and encouraging, not generic advice. If a fact "
@@ -94,7 +98,9 @@ _FALLBACK_SYSTEM_PROMPT = (
     "based on their assessment history. Given per-skill mastery percentages "
     "and their most-missed questions, write 120-180 words on what to focus "
     "on first and a concrete study routine. Only use facts provided; never "
-    "invent skills or numbers."
+    "invent skills or numbers. Format the answer in clean Markdown with a "
+    "short `##` heading, **bold** skill names, and `-` bullet points; no "
+    "tables, HTML, or code blocks."
 )
 
 
@@ -202,6 +208,13 @@ class StudentInsightsService:
         latest_wrong_response: dict[str, str] = {}
         latest_wrong_at: dict[str, datetime] = {}
 
+        # Trend evidence is derived ONLY from submitted attempts below. The
+        # knowledge-state history is updated by the tracer for practice and
+        # in-progress answers too, so it cannot back a claim about assessment
+        # progress. Each point is (submission time, accuracy % on that skill
+        # within one submitted attempt).
+        skill_attempt_accuracy: dict[str, list[tuple[datetime, float]]] = {}
+
         total_answered = 0
         graded_correct = 0
 
@@ -222,12 +235,20 @@ class StudentInsightsService:
                         questions_by_id[str(q.id)] = q
 
         for attempt in submitted:
+            attempt_time = attempt.submitted_at or attempt.started_at
+            graded_this_attempt: dict[str, int] = {}
+            correct_this_attempt: dict[str, int] = {}
+
             for answer in attempt.answers:
                 question = questions_by_id.get(answer.question_id)
                 if not question:
+                    # The question was deleted after this attempt. Its answer
+                    # is no longer tied to a known skill/tag, so it cannot be
+                    # attributed to anything and must not skew any metric.
                     continue
 
-                for tag in question.skill_tags:
+                tags = list(question.skill_tags or [])
+                for tag in tags:
                     seen_by_skill[tag] = seen_by_skill.get(tag, 0) + 1
                     attempts_touched.setdefault(tag, set()).add(str(attempt.id))
 
@@ -244,6 +265,11 @@ class StudentInsightsService:
                     continue
 
                 total_answered += 1
+                for tag in tags:
+                    graded_this_attempt[tag] = graded_this_attempt.get(tag, 0) + 1
+                    if answer.is_correct:
+                        correct_this_attempt[tag] = correct_this_attempt.get(tag, 0) + 1
+
                 if answer.is_correct:
                     graded_correct += 1
                     continue
@@ -254,12 +280,19 @@ class StudentInsightsService:
                 if qid not in latest_wrong_at or attempt.started_at > latest_wrong_at[qid]:
                     latest_wrong_at[qid] = attempt.started_at
 
+            if attempt_time is not None:
+                for tag, graded in graded_this_attempt.items():
+                    skill_attempt_accuracy.setdefault(tag, []).append(
+                        (attempt_time, 100.0 * correct_this_attempt.get(tag, 0) / graded)
+                    )
+
         focus_areas, strengths = await self._rank_skills(
             mastery_by_skill=mastery_by_skill,
             wrong_by_skill=wrong_by_skill,
             seen_by_skill=seen_by_skill,
             attempts_touched=attempts_touched,
             last_missed_at=last_missed_at,
+            skill_attempt_accuracy=skill_attempt_accuracy,
         )
 
         study_guide = await self._build_study_guide(
@@ -297,6 +330,7 @@ class StudentInsightsService:
         seen_by_skill: dict[str, int],
         attempts_touched: dict[str, set[str]],
         last_missed_at: dict[str, datetime],
+        skill_attempt_accuracy: dict[str, list[tuple[datetime, float]]] | None = None,
     ) -> tuple[list[SkillFocus], list[SkillFocus]]:
         # Union of both sources: a skill can appear in knowledge states
         # without being missed in any attempt the question bank still
@@ -325,7 +359,7 @@ class StudentInsightsService:
                 times_seen=seen,
                 priority_score=round(priority, 1),
                 severity=self._severity(mastery, wrong, seen),
-                trend=self._trend(state),
+                trend=self._trend_from_attempts((skill_attempt_accuracy or {}).get(skill, [])),
                 last_missed_at=last_missed_at.get(skill),
             )
 
@@ -349,24 +383,27 @@ class StudentInsightsService:
         return "ok"
 
     @staticmethod
-    def _trend(state) -> str:
-        """Direction over the knowledge-state history the tracer has been
-        appending. Fewer than 2 points means there's no trend to claim —
-        reporting "steady" there would be inventing information."""
-        history = list(getattr(state, "history", []) or []) if state else []
-        if len(history) < 2:
-            return "unknown"
+    def _trend_from_attempts(points: list[tuple[datetime, float]]) -> str:
+        """Direction across SUBMITTED attempts only.
 
-        points = [
-            h.get("mastery_pct") if isinstance(h, dict) else getattr(h, "mastery_pct", None)
-            for h in history
-        ]
-        points = [p for p in points if isinstance(p, (int, float))]
+        Each point is one attempt's accuracy on this skill, ordered by
+        submission time. Practice attempts, in-progress attempts and the
+        knowledge tracer's history (which also sees practice) are deliberately
+        excluded — they cannot support a claim about assessment progress.
+        Fewer than 2 points, or a change within the noise band, is reported as
+        unknown/steady rather than as improvement or decline.
+        """
         if len(points) < 2:
             return "unknown"
 
-        delta = points[-1] - points[0]
-        # 5 points is noise on a percentage scale, not a real trend.
+        ordered = sorted(points, key=lambda p: p[0])
+        accuracies = [value for _, value in ordered]
+        deltas = [later - earlier for earlier, later in zip(accuracies, accuracies[1:])]
+        if any(delta > 0 for delta in deltas) and any(delta < 0 for delta in deltas):
+            return "steady"  # fluctuation is not a trend
+
+        delta = accuracies[-1] - accuracies[0]
+        # 5 percentage points is noise on a percentage scale.
         if delta > 5:
             return "improving"
         if delta < -5:

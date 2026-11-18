@@ -88,6 +88,7 @@ export default function AssessmentResultsPage() {
                   <Badge variant="secondary" className="uppercase">
                     {answer.type ?? "unknown"}
                   </Badge>
+                  {answer.section && <Badge variant="outline">{answer.section}</Badge>}
                   <span className="ml-auto text-xs text-muted-foreground">
                     {answer.marks_awarded}/{answer.max_marks} marks
                   </span>
@@ -104,6 +105,22 @@ export default function AssessmentResultsPage() {
                     {answer.response || "(no response)"}
                   </pre>
                 </details>
+                {result.status === "submitted" && (answer.correct_answer || answer.explanation) && (
+                  <div className="mt-2 space-y-1 rounded-md border border-border bg-secondary/40 p-2 text-xs">
+                    {answer.correct_answer && (
+                      <p>
+                        <span className="font-medium">Correct answer: </span>
+                        {answer.correct_answer}
+                      </p>
+                    )}
+                    {answer.explanation && (
+                      <p>
+                        <span className="font-medium">Explanation: </span>
+                        {answer.explanation}
+                      </p>
+                    )}
+                  </div>
+                )}
                 {answer.code_result && answer.code_result.results.length > 0 && (
                   <div className="mt-2 space-y-1">
                     {answer.code_result.results.map((testResult) => (
@@ -128,7 +145,7 @@ export default function AssessmentResultsPage() {
         </Card>
       )}
 
-      <div className="flex justify-center gap-3">
+      <div className="flex flex-wrap justify-center gap-3">
         <Button asChild variant="secondary">
           <Link href="/dashboard/assessments">Back to assessments</Link>
         </Button>

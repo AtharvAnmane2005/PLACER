@@ -1,7 +1,11 @@
 export type DifficultyLevel = "easy" | "medium" | "hard";
-export type QuestionType = "mcq" | "coding" | "descriptive";
+export type QuestionType = "mcq" | "multiple_select" | "true_false" | "coding" | "descriptive";
 export type AttemptStatus = "in_progress" | "submitted";
 export type AssessmentType = "practice" | "drive";
+export type AssessmentFormat = "adaptive" | "standardized";
+export type AssessmentPublishStatus = "draft" | "published";
+export type QuestionStatus = "active" | "inactive";
+export type TemplateStatus = "active" | "inactive";
 export type CodingLanguage = "python" | "javascript";
 
 export interface AntiCheatConfig {
@@ -18,6 +22,10 @@ export interface AssessmentCreateRequest {
   max_violations: number;
   require_fullscreen: boolean;
   type?: AssessmentType;
+  format?: AssessmentFormat;
+  instructions?: string;
+  allow_retake?: boolean;
+  negative_marks?: number;
 }
 
 export interface AssessmentResponse {
@@ -29,6 +37,16 @@ export interface AssessmentResponse {
   anti_cheat_config: AntiCheatConfig;
   type: AssessmentType;
   drive_id: string | null;
+  format: AssessmentFormat;
+  status: AssessmentPublishStatus;
+  question_count: number;
+  total_marks: number;
+  passing_marks: number;
+  negative_marks: number;
+  instructions: string;
+  allow_retake: boolean;
+  template_id: string | null;
+  sections: PlacementSectionMetadata[];
 }
 
 export interface QuestionStudentView {
@@ -81,6 +99,21 @@ export interface StartAttemptResponse {
   time_remaining_sec: number;
   anti_cheat_config: AntiCheatConfig;
   next_question: QuestionStudentView | null;
+  questions: QuestionStudentView[];
+  answered_question_ids: string[];
+  total_questions: number;
+  format: AssessmentFormat;
+  instructions: string;
+  total_marks: number;
+}
+
+export interface AttemptQuestionsResponse {
+  attempt_id: string;
+  format: AssessmentFormat;
+  total_questions: number;
+  questions: QuestionStudentView[];
+  answered_question_ids: string[];
+  instructions: string;
 }
 
 export interface SubmitAnswerResponse {
@@ -89,6 +122,7 @@ export interface SubmitAnswerResponse {
   next_question: QuestionStudentView | null;
   attempt_status: AttemptStatus;
   code_result: CodeRunSummary | null;
+  answered_question_ids: string[];
 }
 
 export interface FinishAttemptResponse {
@@ -116,6 +150,10 @@ export interface AttemptAnswerDetail {
   marks_awarded: number;
   max_marks: number;
   code_result: CodeRunSummary | null;
+  /** Only present after the attempt has been submitted. */
+  correct_answer: string | null;
+  explanation: string | null;
+  section: string | null;
 }
 
 export interface AttemptResultResponse {
@@ -136,6 +174,145 @@ export interface KnowledgeStateResponse {
   attempts_count: number;
 }
 
+// ---------------------------------------------------------------------------
+// Reusable assessment templates
+// ---------------------------------------------------------------------------
+export interface SectionConfig {
+  name: string;
+  questions: number;
+  category_ids: string[];
+  difficulty?: DifficultyLevel | null;
+}
+
+export interface AssessmentTemplateUpsertRequest {
+  name: string;
+  description: string;
+  category_ids: string[];
+  sections: SectionConfig[];
+  difficulty_distribution: Partial<Record<DifficultyLevel, number>>;
+  question_types: QuestionType[];
+  topics: string[];
+  skills: string[];
+  total_questions: number;
+  total_marks: number;
+  time_limit_sec: number;
+  passing_marks: number;
+  negative_marks: number;
+  instructions: string;
+  randomize_options: boolean;
+  allow_retake: boolean;
+  status: TemplateStatus;
+  format: AssessmentFormat;
+  preset_key?: string | null;
+}
+
+export interface AssessmentTemplateResponse extends AssessmentTemplateUpsertRequest {
+  id: string;
+  preset_key: string | null;
+  created_at: string;
+  updated_at: string | null;
+}
+
+export interface TemplatePresetResponse {
+  key: string;
+  name: string;
+  description: string;
+  config: AssessmentTemplateUpsertRequest;
+}
+
+// ---------------------------------------------------------------------------
+// Standardized placement assessment generation
+// ---------------------------------------------------------------------------
+export interface PlacementSectionRequest {
+  name: string;
+  category_ids: string[];
+  skill_tags: string[];
+}
+
+export interface PlacementGenerationRequest {
+  drive_id: string;
+  title?: string | null;
+  time_limit_minutes?: number;
+  passing_marks?: number;
+  negative_marks?: number;
+  instructions?: string;
+  allow_retake?: boolean;
+  sections?: PlacementSectionRequest[];
+  template_id?: string | null;
+  publish?: boolean;
+}
+
+export interface PlacementQuestionView {
+  id: string;
+  text: string;
+  section: string;
+  difficulty: DifficultyLevel;
+  type: QuestionType;
+  topic: string | null;
+  skill: string | null;
+  marks: number;
+}
+
+export interface PlacementSectionMetadata {
+  name: string;
+  question_ids: string[];
+  difficulties: DifficultyLevel[];
+  count: number;
+}
+
+export interface PlacementGenerationResponse {
+  assessment_id: string;
+  title: string;
+  drive_id: string;
+  format: AssessmentFormat;
+  status: AssessmentPublishStatus;
+  total_questions: number;
+  total_marks: number;
+  time_limit_sec: number;
+  sections: PlacementSectionMetadata[];
+  questions: PlacementQuestionView[];
+  template_id: string | null;
+  deficit: string[];
+}
+
+export interface PlacementEligibilityResponse {
+  can_generate: boolean;
+  sections: Array<{
+    name: string;
+    questions: number;
+    category_ids: string[];
+    selected: number;
+  }>;
+  deficits: string[];
+}
+
+export interface PlacementParticipationResponse {
+  drive_id: string;
+  assessment_id: string;
+  eligible_students: number;
+  attempts_started: number;
+  submitted: number;
+  in_progress: number;
+  students: Array<{
+    student_id: string;
+    application_id: string;
+    application_status: string;
+    assessment_status: string;
+    attempt_count: number;
+    attempt_statuses: string[];
+  }>;
+}
+
+export interface PlacementRevisionRequest {
+  confirm_republish: boolean;
+  reason: string;
+  time_limit_minutes?: number | null;
+  publish?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Analytics / insights (unchanged shapes)
+// ---------------------------------------------------------------------------
 /** One skill's standing across the student's whole assessment history. */
 export interface SkillFocus {
   skill: string;

@@ -3,13 +3,13 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "@/lib/api-client";
 import type {
   ApplicationDetail,
-  ApplicationStatus,
   BulkApplicationStatusRequest,
   BulkStatusResult,
   DriveCreateRequest,
   DriveDetail,
   DriveSummary,
   DriveUpdateRequest,
+  ManagedApplicationStatus,
   ScreeningSummary,
 } from "@/types/drive";
 
@@ -151,7 +151,7 @@ export function useUpdateApplicationStatus(driveId: string) {
       rejectionNote,
     }: {
       applicationId: string;
-      status: ApplicationStatus;
+      status: ManagedApplicationStatus;
       rejectionReasons?: string[];
       rejectionNote?: string;
     }) => {
@@ -163,6 +163,9 @@ export function useUpdateApplicationStatus(driveId: string) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["drives", driveId] });
+      // Status changes must be reflected immediately in every analytics
+      // chart and drill-down, not only after a manual refresh.
+      queryClient.invalidateQueries({ queryKey: ["analytics"] });
     },
   });
 }
@@ -179,6 +182,43 @@ export function useBulkUpdateApplicationStatus(driveId: string) {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["drives", driveId] });
+      queryClient.invalidateQueries({ queryKey: ["analytics"] });
+    },
+  });
+}
+
+/**
+ * Status change for a row that carries its own drive id.
+ *
+ * The admin applications workspace spans every drive, so the drive id comes
+ * from the selected row rather than from a fixed hook argument. Uses the same
+ * audited PATCH endpoint as the per-drive view.
+ */
+export function useUpdateApplicationStatusForDrive() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      driveId,
+      applicationId,
+      status,
+      rejectionReasons,
+      rejectionNote,
+    }: {
+      driveId: string;
+      applicationId: string;
+      status: ManagedApplicationStatus;
+      rejectionReasons?: string[];
+      rejectionNote?: string;
+    }) => {
+      const { data } = await apiClient.patch<ApplicationDetail>(
+        `/drives/${driveId}/applications/${applicationId}`,
+        { status, rejection_reasons: rejectionReasons, rejection_note: rejectionNote }
+      );
+      return data;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["drives"] });
+      queryClient.invalidateQueries({ queryKey: ["analytics"] });
     },
   });
 }

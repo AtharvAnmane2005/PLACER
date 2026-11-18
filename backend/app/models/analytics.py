@@ -9,19 +9,41 @@ these endpoints testable against the same mongomock setup every other
 test in this suite already uses without worrying about pipeline-operator
 support gaps.
 """
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.market import MarketMeta
 
 
 class ApplicationStatusBreakdown(BaseModel):
+    """Full status split, including legacy ``selected`` outcomes.
+
+    Kept for the admin overview, where a real ``selected`` record is a
+    placement outcome. TPO dashboards deliberately use
+    :class:`TpoApplicationStatusBreakdown` instead: their live pipeline is
+    Applied -> Shortlisted / Rejected only.
+    """
+
     applied: int
     shortlisted: int
     rejected: int
     selected: int
+
+
+class TpoApplicationStatusBreakdown(BaseModel):
+    """The three statuses a TPO actually manages.
+
+    ``selected`` is intentionally absent: the current TPO workflow ends at
+    shortlist/reject, so the dashboard never renders a Selected stage, filter
+    or rate. Legacy ``selected`` records still exist in storage and remain
+    visible in the admin overview; they are simply not part of this pipeline.
+    """
+
+    applied: int
+    shortlisted: int
+    rejected: int
 
 
 class DriveAssessmentRankingEntry(BaseModel):
@@ -38,6 +60,9 @@ class DriveAssessmentRankingEntry(BaseModel):
     cgpa: float | None = None
     score_pct: float
     submitted_at: datetime
+    # Provenance — lets the UI mark demo rows instead of passing them off as
+    # institutional results.
+    is_synthetic: bool = False
 
 
 class DriveAssessmentRanking(BaseModel):
@@ -58,13 +83,19 @@ class DriveFunnel(BaseModel):
     company_name: str
     status: str
     total_applications: int
-    breakdown: ApplicationStatusBreakdown
+    breakdown: TpoApplicationStatusBreakdown
     # Assessment linkage + participation (Phase: per-drive rankings). Additive
     # fields — the ranking detail itself moved to the per-drive endpoint.
     required_assessment_id: str | None = None
     assessment_title: str | None = None
     participant_count: int = 0  # unique students who STARTED the drive assessment
     submitted_participant_count: int = 0  # unique students with a SUBMITTED attempt
+    # Eligible applications (eligibility_passed is not False — the same
+    # convention as the screening summary). One application per student per
+    # drive, so this is also the eligible-student denominator.
+    eligible_application_count: int = 0
+    # Completion = submitted participants / eligible applications, zero-safe.
+    completion_rate_pct: float = 0.0
 
 
 class TpoAnalyticsResponse(BaseModel):
@@ -72,9 +103,11 @@ class TpoAnalyticsResponse(BaseModel):
     open_drives: int
     closed_drives: int
     total_applications: int
-    breakdown: ApplicationStatusBreakdown
-    selection_rate_pct: float  # selected / total_applications, 0 if no applications
+    breakdown: TpoApplicationStatusBreakdown
     drives: list[DriveFunnel]
+    # Number of applications in this view that are flagged synthetic. The
+    # dashboard renders a demo-data banner whenever this is nonzero.
+    synthetic_application_count: int = 0
 
 
 class DriveApplicantEntry(BaseModel):
@@ -92,6 +125,7 @@ class DriveApplicantEntry(BaseModel):
     batch_year: int | None = None
     status: str
     applied_at: datetime
+    is_synthetic: bool = False
 
 
 class DriveApplicantsResponse(BaseModel):
@@ -124,6 +158,7 @@ class DriveParticipantEntry(BaseModel):
     score_pct: float | None = None
     started_at: datetime
     submitted_at: datetime | None = None
+    is_synthetic: bool = False
 
 
 class DriveParticipantsResponse(BaseModel):
@@ -144,6 +179,37 @@ class SkillMasteryOverview(BaseModel):
     student_count: int
 
 
+class AdminUserRoleCount(BaseModel):
+    """One user-account role and how many accounts hold it.
+
+    Counted from the auth ``users`` collection (not the per-role profile
+    collections), so every account is represented exactly once even if its
+    profile document is missing.
+    """
+
+    role: Literal["student", "tpo", "admin"]
+    count: int
+
+
+class AdminDepartmentStudentCount(BaseModel):
+    department: str  # free-text student department, or "Not specified"
+    count: int
+
+
+class AdminActivityMonthPoint(BaseModel):
+    """One calendar month of platform activity.
+
+    Counts come from domain timestamps (``users.created_at``,
+    ``placement_drives.created_at`` and ``applications.applied_at``), never
+    from the incomplete ``activity_logs`` collection.
+    """
+
+    month: str  # "YYYY-MM"
+    new_students: int
+    new_drives: int
+    applications: int
+
+
 class AdminAnalyticsResponse(BaseModel):
     total_students: int
     total_tpos: int
@@ -151,7 +217,17 @@ class AdminAnalyticsResponse(BaseModel):
     open_drives: int
     closed_drives: int
     total_applications: int
+    # Distinct students across all applications (never application rows).
+    # ``students_with_applications`` is the user-facing name; the legacy
+    # ``unique_applicants`` field is kept for older clients.
+    unique_applicants: int = 0
+    students_with_applications: int = 0
+    total_companies: int = 0
     application_breakdown: ApplicationStatusBreakdown
+    # Legacy "selected" rows are read-time mapped into ``shortlisted`` so the
+    # three current statuses always sum to total_applications. This audit count
+    # records how many legacy rows were mapped; the UI does not render it.
+    legacy_selected: int = 0
     placed_students: int  # unique students with at least one "selected" application
     placement_rate_pct: float  # placed_students / total_students, 0 if no students
     total_categories: int
@@ -159,8 +235,264 @@ class AdminAnalyticsResponse(BaseModel):
     total_assessments: int
     total_attempts: int
     submitted_attempts: int
-    average_score_pct: float  # across submitted attempts with nonzero max possible marks
+    # Mean percentage across submitted attempts that have nonzero maximum
+    # marks. None (not 0.0) when no attempt qualifies, so "no data" is never
+    # displayed as a real score of zero.
+    average_score_pct: float | None = None
     skill_mastery_overview: list[SkillMasteryOverview]
+    # Additive dashboard fields. Defaults keep every existing consumer and
+    # response fixture valid while the new overview charts use them.
+    total_admins: int = 0
+    user_role_counts: list[AdminUserRoleCount] = Field(default_factory=list)
+    # Provenance counts so the overview can disclose demo data instead of
+    # presenting it as genuine institutional activity.
+    synthetic_students: int = 0
+    synthetic_applications: int = 0
+    department_student_counts: list[AdminDepartmentStudentCount] = Field(default_factory=list)
+
+
+class AdminActivityResponse(BaseModel):
+    """Admin overview activity: user distribution, departments and monthly
+    new-account / new-drive / application counts."""
+
+    user_distribution: list[AdminUserRoleCount]
+    total_users: int
+    department_student_counts: list[AdminDepartmentStudentCount]
+    monthly_activity: list[AdminActivityMonthPoint]
+
+
+# ---------------------------------------------------------------------------
+# Role-specific dashboard analytics (student / TPO / admin overview charts)
+#
+# Every value below is computed from persisted domain records. No synthetic
+# series, no hard-coded sample data, and no inference of "completed" work from
+# an in-progress attempt or an application that was merely submitted.
+# ---------------------------------------------------------------------------
+
+
+class StudentApplicationStatusCounts(BaseModel):
+    applied: int = 0
+    shortlisted: int = 0
+    rejected: int = 0
+    selected: int = 0
+
+
+class StudentDomainScore(BaseModel):
+    """One of the five placement domains, scored from graded answers only."""
+
+    domain: str
+    score_pct: float  # difficulty-weighted marks / maximum marks, 0-100
+    correct: int
+    answered: int
+
+
+class StudentAssessmentTrendPoint(BaseModel):
+    """One submitted, graded assessment attempt in chronological order."""
+
+    attempt_id: str
+    assessment_id: str
+    assessment_title: str
+    submitted_at: datetime
+    score_pct: float
+    correct: int
+    answered: int
+
+
+class StudentAnalyticsResponse(BaseModel):
+    applications: StudentApplicationStatusCounts
+    total_applications: int
+    # Every rate uses the student's own total applications as the denominator;
+    # zero denominators return 0.0.
+    applied_rate_pct: float = 0.0
+    shortlisting_rate_pct: float = 0.0
+    rejection_rate_pct: float = 0.0
+    domain_scores: list[StudentDomainScore]
+    assessment_trend: list[StudentAssessmentTrendPoint]
+    submitted_attempt_count: int
+    # Mean of the student's graded submitted attempts. None (not 0.0) when the
+    # student has no graded attempt, so "no data" is never shown as a score.
+    average_score_pct: float | None = None
+    # Legacy "selected" rows mapped into ``shortlisted`` for the current
+    # three-status view. Audit-only; not rendered.
+    legacy_selected: int = 0
+
+
+class TpoDepartmentStatusCounts(BaseModel):
+    department: str
+    applied: int
+    shortlisted: int
+    rejected: int
+    total: int
+
+
+class TpoMonthlyApplicationPoint(BaseModel):
+    month: str  # "YYYY-MM"
+    applied: int
+    shortlisted: int
+    rejected: int
+    total: int
+
+
+class TpoCompanyApplicationCounts(BaseModel):
+    company_id: str | None = None
+    company_name: str
+    applied: int
+    shortlisted: int
+    rejected: int
+    total: int
+
+
+class TpoDriveApplicationCounts(BaseModel):
+    """Application status split for ONE of the TPO's drives.
+
+    Only drives that actually received applications in the filtered window are
+    included, so a drive is never shown with an invented zero row.
+    """
+
+    drive_id: str
+    job_title: str
+    company_id: str | None = None
+    company_name: str
+    drive_status: str
+    applied: int
+    shortlisted: int
+    rejected: int
+    total: int
+
+
+class TpoApplicationRecordEntry(BaseModel):
+    """One application row for the click-through detail table.
+
+    Deliberately excludes contact details, resumes and assessment answers:
+    the dashboard drill-down needs identity + outcome, not private data.
+    """
+
+    application_id: str
+    student_id: str
+    student_name: str
+    department: str | None = None
+    drive_id: str
+    job_title: str
+    company_id: str | None = None
+    company_name: str
+    status: str
+    applied_at: datetime
+    is_synthetic: bool = False
+
+
+class TpoApplicationRecordsResponse(BaseModel):
+    total: int
+    page: int
+    limit: int
+    entries: list[TpoApplicationRecordEntry]
+
+
+class TpoApplicationAnalyticsResponse(BaseModel):
+    total_applications: int
+    total_drives: int
+    date_from: date | None = None
+    date_to: date | None = None
+    status_breakdown: TpoApplicationStatusBreakdown
+    # Distinct students, not application rows. An applicant who applied to
+    # several drives is counted once. ``students_with_applications`` is the
+    # user-facing name; the legacy field is kept for older clients.
+    unique_applicants: int = 0
+    students_with_applications: int = 0
+    # Dashboard KPIs: distinct applicants and currently open drives owned by
+    # this TPO. ``active_drives`` is not date-filtered (drive status is a
+    # current fact, not an application event).
+    total_students: int = 0
+    active_drives: int = 0
+    # Legacy "selected" rows mapped into ``shortlisted`` for this view.
+    legacy_selected: int = 0
+    # Number of applications in this view that are flagged synthetic.
+    synthetic_application_count: int = 0
+    # Denominators are total_applications; all are zero-safe.
+    applied_rate_pct: float = 0.0
+    shortlisting_rate_pct: float = 0.0
+    rejection_rate_pct: float = 0.0
+    departments: list[TpoDepartmentStatusCounts]
+    monthly_trend: list[TpoMonthlyApplicationPoint]
+    companies: list[TpoCompanyApplicationCounts]
+    company_count: int  # distinct companies BEFORE top_n truncation
+    company_sort: str
+    top_n: int
+    drives: list[TpoDriveApplicationCounts] = Field(default_factory=list)
+    drive_count: int = 0  # drives with at least one application in this view
+    # Aggregate radar across this TPO's drive assessments, computed from real
+    # graded answers only. Empty when no graded attempt exists.
+    domain_scores: list[StudentDomainScore] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Admin applications workspace
+# ---------------------------------------------------------------------------
+
+
+class AdminApplicationSummary(BaseModel):
+    """Status cards for the admin applications workspace.
+
+    Computed over the population matching every filter EXCEPT the status
+    filter, so all four cards stay meaningful while a status filter is active.
+    """
+
+    total: int = 0
+    applied: int = 0
+    shortlisted: int = 0
+    rejected: int = 0
+    legacy_selected: int = 0
+
+
+class AdminApplicationEntry(BaseModel):
+    """One application row across every drive, for the admin workspace.
+
+    Carries identity + outcome only (no contact details, resumes or answers).
+    ``rank`` is the student's standing in the drive's required assessment,
+    computed from the same best-submitted-attempt rule as the TPO ranking.
+    """
+
+    application_id: str
+    student_id: str
+    student_name: str
+    department: str | None = None
+    company_id: str | None = None
+    company_name: str
+    drive_id: str
+    job_title: str
+    assessment_id: str | None = None
+    assessment_title: str | None = None
+    assessment_status: str = "not_required"
+    assessment_score_pct: float | None = None
+    rank: int | None = None
+    status: str
+    applied_at: datetime
+    is_synthetic: bool = False
+
+
+class AdminApplicationRecordsResponse(BaseModel):
+    total: int
+    page: int
+    limit: int
+    summary: AdminApplicationSummary
+    entries: list[AdminApplicationEntry]
+
+
+class AdminApplicationFilterCompany(BaseModel):
+    id: str
+    name: str
+
+
+class AdminApplicationFilterDrive(BaseModel):
+    id: str
+    job_title: str
+    company_name: str
+    status: str
+
+
+class AdminApplicationFiltersResponse(BaseModel):
+    companies: list[AdminApplicationFilterCompany]
+    drives: list[AdminApplicationFilterDrive]
+    departments: list[str]
 
 
 # ---------------------------------------------------------------------------

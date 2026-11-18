@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
+from app.core.departments import normalize_department
 from app.models.resume import ParsedResumeData
 from app.models.user import StudentInDB, StudentProfileUpdateRequest
 from app.repositories.profile_repositories import StudentRepository
@@ -58,7 +59,7 @@ class ProfileAutofillService:
         if not student.phone and parsed.phone:
             patch_fields["phone"] = parsed.phone
         if not student.department and parsed.department:
-            patch_fields["department"] = parsed.department
+            patch_fields["department"] = normalize_department(parsed.department)
         if not student.batch_year and parsed.batch_year:
             patch_fields["batch_year"] = parsed.batch_year
         if not student.cgpa and parsed.cgpa:

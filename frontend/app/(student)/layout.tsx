@@ -80,6 +80,7 @@ export default function StudentDashboardLayout({ children }: { children: React.R
       initials={initialsFrom(profile?.name, user.email)}
       profileHref="/dashboard/profile"
       onLogout={handleLogout}
+      contentClassName="min-w-0"
     >
       <Suspense fallback={null}>
         <GoogleProfileCompletionRedirect />

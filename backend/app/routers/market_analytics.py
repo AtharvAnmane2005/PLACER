@@ -58,6 +58,15 @@ async def get_market_analytics(
         default=False,
         description="Only analyse technical skills (ignores soft skills).",
     ),
+    source: str | None = Query(
+        default=None,
+        max_length=50,
+        description=(
+            "Data source group: 'mock' (demo dataset), 'real' (all imported "
+            "public postings), 'all', or one exact source id. Omit for the "
+            "server default (demo data when present, otherwise real data)."
+        ),
+    ),
     sort: Literal["trending", "demand"] = Query(
         default="trending",
         description="Order trending skills by weighted trend score or raw demand.",
@@ -80,6 +89,7 @@ async def get_market_analytics(
         location=location,
         skill_category=skill_category.value if skill_category is not None else None,
         technical_only=technical_only,
+        source=source,
         sort=sort,
         limit=limit,
     )
@@ -93,9 +103,17 @@ async def get_market_analytics(
 async def get_market_filters(
     current_user: CurrentUser = Depends(require_role("tpo")),
     db: AsyncIOMotorDatabase = Depends(get_database),
+    source: str | None = Query(
+        default=None,
+        max_length=50,
+        description=(
+            "Source group whose years/companies/locations are listed. Omit for "
+            "the server default. The response always lists every source."
+        ),
+    ),
 ):
     """Available filter options, derived live from the market dataset."""
-    return await MarketAnalyticsService(db).get_available_filters()
+    return await MarketAnalyticsService(db).get_available_filters(source)
 
 
 @router.get("/tpo/market/comparison", response_model=MarketComparisonResponse)
@@ -131,6 +149,14 @@ async def get_market_comparison(
     location: str | None = Query(
         default=None, max_length=100, description="Posting location to filter by."
     ),
+    source: str | None = Query(
+        default=None,
+        max_length=50,
+        description=(
+            "Data source group: 'mock', 'real', 'all', or one exact source id. "
+            "Omit for the server default."
+        ),
+    ),
 ):
     """Compare the full skill requirements of multiple companies or job
     families (same trend math as the dashboard, per-entity denominators)."""
@@ -145,6 +171,7 @@ async def get_market_comparison(
             cross_company=company,
             cross_job_family=job_family.value if job_family is not None else None,
             location=location,
+            source=source,
         )
     except MarketQueryError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

@@ -24,6 +24,7 @@ import {
   useDriveParticipants,
   useDriveRanking,
 } from "@/hooks/use-analytics";
+import { formatPercent } from "@/lib/format";
 import type { DriveFunnel } from "@/types/analytics";
 
 /**
@@ -124,10 +125,8 @@ function ListPager({
 
 function applicationStatusVariant(status: string) {
   switch (status) {
-    case "selected":
-      return "success" as const;
     case "shortlisted":
-      return "outline" as const;
+      return "success" as const;
     case "rejected":
       return "destructive" as const;
     default:
@@ -180,7 +179,9 @@ function RankingPanel({ drive }: { drive: DriveFunnel }) {
             {entry.rank}
           </span>
           <div className="min-w-0 flex-1">
-            <p className="truncate font-medium">{entry.student_name}</p>
+            <p className="flex items-center gap-2 truncate font-medium">
+              {entry.student_name}
+            </p>
             <p className="truncate text-xs text-muted-foreground">
               {entry.department ?? "—"}
               {entry.cgpa != null && ` · CGPA ${entry.cgpa}`}
@@ -243,7 +244,9 @@ function ApplicantsPanel({ drive }: { drive: DriveFunnel }) {
           {data.entries.map((entry) => (
             <div key={entry.application_id} className="flex items-center gap-3 p-3 text-sm">
               <div className="min-w-0 flex-1">
-                <p className="truncate font-medium">{entry.student_name}</p>
+                <p className="flex items-center gap-2 truncate font-medium">
+                  {entry.student_name}
+                </p>
                 <p className="truncate text-xs text-muted-foreground">
                   {entry.department ?? "—"}
                   {entry.batch_year != null && ` · Batch ${entry.batch_year}`}
@@ -318,7 +321,9 @@ function ParticipantsPanel({ drive }: { drive: DriveFunnel }) {
           {data.entries.map((entry) => (
             <div key={entry.attempt_id} className="flex items-center gap-3 p-3 text-sm">
               <div className="min-w-0 flex-1">
-                <p className="truncate font-medium">{entry.student_name}</p>
+                <p className="flex items-center gap-2 truncate font-medium">
+                  {entry.student_name}
+                </p>
                 <p className="truncate text-xs text-muted-foreground">
                   {entry.department ?? "—"}
                   {entry.batch_year != null && ` · Batch ${entry.batch_year}`}
@@ -369,11 +374,14 @@ function DriveCard({ drive }: { drive: DriveFunnel }) {
             <span>{drive.total_applications} applied</span>
             <span>{drive.breakdown.shortlisted} shortlisted</span>
             <span>{drive.breakdown.rejected} rejected</span>
-            <span>{drive.breakdown.selected} selected</span>
             <span>
               {drive.participant_count} took the test
               {drive.submitted_participant_count !== drive.participant_count &&
                 ` (${drive.submitted_participant_count} submitted)`}
+            </span>
+            <span>
+              {formatPercent(drive.completion_rate_pct, 1)} completion of{" "}
+              {drive.eligible_application_count} eligible
             </span>
           </div>
         </div>

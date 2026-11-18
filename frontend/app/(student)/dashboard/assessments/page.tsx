@@ -16,6 +16,7 @@ import { useAssessments, useKnowledgeStates, useStartAssessment } from "@/hooks/
 import { useDrives, useMyApplications } from "@/hooks/use-drives";
 import { saveAttemptState } from "@/lib/attempt-storage";
 import { fingerprintHash } from "@/lib/fingerprint";
+import { severityColorFromMastery } from "@/lib/severity";
 import type { AssessmentResponse } from "@/types/assessment";
 import type { ApplicationResponse } from "@/types/drive";
 
@@ -61,6 +62,13 @@ export default function AssessmentsPage() {
         currentQuestion: result.next_question,
         startedAtMs: Date.now() - elapsedMs,
         violationCount: 0,
+        format: result.format,
+        questions: result.questions,
+        answeredQuestionIds: result.answered_question_ids,
+        answers: {},
+        activeIndex: 0,
+        instructions: result.instructions,
+        totalMarks: result.total_marks,
       });
       router.push(`/dashboard/assessments/${result.attempt_id}/take`);
     } catch (err: any) {
@@ -97,7 +105,11 @@ export default function AssessmentsPage() {
           <span className="flex items-center gap-1">
             <Clock className="h-3.5 w-3.5" /> {formatMinutes(assessment.time_limit_sec)}
           </span>
-          <span>{assessment.question_pool_size} questions</span>
+          <span>
+            {assessment.format === "standardized"
+              ? `${assessment.question_count || 20} fixed questions`
+              : `${assessment.question_pool_size} questions`}
+          </span>
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -118,7 +130,7 @@ export default function AssessmentsPage() {
       <div>
         <h1 className="font-display text-2xl font-semibold">Assessments</h1>
         <p className="text-sm text-muted-foreground">
-          Adaptive skill assessments — difficulty adjusts to your answers as you go.
+          Adaptive practice and standardized placement tests — the same fixed question set for every eligible student.
         </p>
       </div>
 
@@ -138,7 +150,7 @@ export default function AssessmentsPage() {
             rankings.
           </p>
           {assessmentsLoading ? (
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               {Array.from({ length: 2 }).map((_, i) => (
                 <Skeleton key={i} className="h-40 w-full" />
               ))}
@@ -150,7 +162,7 @@ export default function AssessmentsPage() {
               description="Your TPO or admin hasn't published a practice assessment yet."
             />
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               {practiceAssessments.map((assessment) => renderAssessmentCard(assessment))}
             </div>
           )}
@@ -162,7 +174,7 @@ export default function AssessmentsPage() {
             what appears in the TPO&apos;s drive assessment rankings.
           </p>
           {assessmentsLoading ? (
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               {Array.from({ length: 2 }).map((_, i) => (
                 <Skeleton key={i} className="h-40 w-full" />
               ))}
@@ -174,12 +186,12 @@ export default function AssessmentsPage() {
               description="Apply to a drive with a required assessment and it will appear here."
             />
           ) : (
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               {driveAssessments.map(({ assessment, application, drive }) => (
                 <Card key={assessment.id}>
                   <CardHeader>
                     <div className="flex items-start justify-between gap-2">
-                      <div>
+                      <div className="min-w-0">
                         <CardTitle className="text-base">{assessment.title}</CardTitle>
                         <CardDescription>
                           {drive ? `${drive.job_title} · ${drive.company.name}` : "Drive assessment"}
@@ -195,7 +207,11 @@ export default function AssessmentsPage() {
                       <span className="flex items-center gap-1">
                         <Clock className="h-3.5 w-3.5" /> {formatMinutes(assessment.time_limit_sec)}
                       </span>
-                      <span>{assessment.question_pool_size} questions</span>
+                      <span>
+                        {assessment.format === "standardized"
+                          ? `${assessment.question_count || 20} fixed questions`
+                          : `${assessment.question_pool_size} questions`}
+                      </span>
                     </CardDescription>
                   </CardHeader>
                   <CardContent>
@@ -242,15 +258,22 @@ export default function AssessmentsPage() {
           ) : (
             <div className="space-y-3">
               {knowledgeStates.map((state) => (
-                <div key={state.skill_tag} className="flex items-center gap-3">
-                  <Badge variant="outline" className="w-32 shrink-0 justify-center truncate">
+                <div key={state.skill_tag} className="flex items-center gap-2 sm:gap-3">
+                  <Badge
+                    variant="outline"
+                    className="w-24 shrink-0 justify-center truncate sm:w-32"
+                  >
                     {state.skill_tag}
                   </Badge>
-                  <Progress value={state.mastery_pct} className="flex-1" />
-                  <span className="w-12 shrink-0 text-right text-sm text-muted-foreground">
+                  <Progress
+                    value={state.mastery_pct}
+                    className="min-w-0 flex-1"
+                    indicatorStyle={{ backgroundColor: severityColorFromMastery(state.mastery_pct) }}
+                  />
+                  <span className="w-10 shrink-0 text-right text-sm text-muted-foreground sm:w-12">
                     {Math.round(state.mastery_pct)}%
                   </span>
-                  <span className="w-20 shrink-0 text-right text-xs text-muted-foreground">
+                  <span className="hidden w-20 shrink-0 text-right text-xs text-muted-foreground sm:block">
                     {state.attempts_count} attempts
                   </span>
                 </div>

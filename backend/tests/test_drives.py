@@ -215,6 +215,29 @@ async def test_apply_fails_when_department_not_eligible(client):
 
 
 @pytest.mark.asyncio
+async def test_apply_succeeds_when_department_is_an_alias_of_eligible_department(client):
+    """A drive requiring "Computer Science" must accept a student whose
+    profile says "CS" — the mismatch that previously blocked applications."""
+    tpo_token = await _register_login_tpo(client, email="aliasdept.tpo@college.edu")
+    drive = await client.post(
+        "/api/v1/drives",
+        headers=_auth_headers(tpo_token),
+        json=_drive_payload(eligibility={"departments": ["Computer Science"]}),
+    )
+    assert drive.status_code == 201
+    # Stored eligibility is canonicalised too.
+    assert drive.json()["eligibility"]["departments"] == ["Computer Science"]
+    drive_id = drive.json()["id"]
+
+    student_token = await _register_login_student(client, "aliasdept@college.edu", department="CS")
+    await _upload_resume(client, student_token)
+
+    response = await client.post(f"/api/v1/drives/{drive_id}/apply", headers=_auth_headers(student_token))
+    assert response.status_code == 201, response.text
+    assert response.json()["eligibility_passed"] is True
+
+
+@pytest.mark.asyncio
 async def test_apply_fails_after_deadline(client):
     tpo_token = await _register_login_tpo(client, email="deadline.tpo@college.edu")
     drive = await client.post(
@@ -329,7 +352,7 @@ async def test_drive_applications_include_student_and_resume_details(client):
     assert response.status_code == 200
     applicant = response.json()[0]
     assert applicant["student_name"] == "Test Student"
-    assert applicant["student_department"] == "CS"
+    assert applicant["student_department"] == "Computer Science"
     assert applicant["resume_filename"] == "resume.pdf"
 
 

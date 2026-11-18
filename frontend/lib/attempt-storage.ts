@@ -1,4 +1,4 @@
-import type { AntiCheatConfig, QuestionStudentView } from "@/types/assessment";
+import type { AntiCheatConfig, AssessmentFormat, QuestionStudentView } from "@/types/assessment";
 
 export interface AttemptState {
   sessionToken: string;
@@ -7,6 +7,16 @@ export interface AttemptState {
   currentQuestion: QuestionStudentView | null;
   startedAtMs: number;
   violationCount: number;
+
+  /** Standardized attempts carry the immutable fixed set locally so students
+   *  can navigate, change answers and resume without regenerating questions. */
+  format?: AssessmentFormat;
+  questions?: QuestionStudentView[];
+  answeredQuestionIds?: string[];
+  answers?: Record<string, string>;
+  activeIndex?: number;
+  instructions?: string;
+  totalMarks?: number;
 }
 
 function key(attemptId: string): string {

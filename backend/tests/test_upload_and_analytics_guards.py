@@ -119,13 +119,13 @@ async def test_total_applications_is_the_real_count_not_the_fetch_length(client,
     svc = AuthService(mock_mongo)
     await svc.register_admin(
         AdminRegisterRequest(
-            email="an.admin@college.edu", password="Admin@12345", name="AN Admin"
+            email="an.admin@college.edu", password="StrongPass123", name="AN Admin"
         )
     )
     token = (
         await client.post(
             "/api/v1/auth/login",
-            json={"email": "an.admin@college.edu", "password": "Admin@12345"},
+            json={"email": "an.admin@college.edu", "password": "StrongPass123"},
         )
     ).json()["access_token"]
 

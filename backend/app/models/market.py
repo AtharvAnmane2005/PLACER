@@ -4,12 +4,15 @@ This collection is deliberately separate from ``placement_drives``:
 
 - ``placement_drives`` is operational data: live drives, deadlines,
   applications, eligibility and assessment linkage.
-- ``job_market_postings`` is a historical market-intelligence dataset used by
-  the Trending Skills & Company Requirements dashboard.
+- ``job_market_postings`` is a market-intelligence dataset used by the
+  Trending Skills & Company Requirements dashboard.
 
-The dataset is mock/demo data. Every document carries ``source="mock"`` and a
-``dataset_version`` so future real postings can be added without rewriting the
-frontend or silently mixing sources.
+Every document carries an explicit ``source``. The seeded demo data uses
+``source="mock"``; genuinely imported public postings use their adapter id
+(``remoteok``, ``arbeitnow``, ...) and additionally carry ``source_url``,
+``source_license`` and ``imported_at`` provenance. Mock and real sources are
+never silently mixed: the analytics service filters by source group and the
+response metadata states exactly which sources produced the figures.
 """
 from datetime import datetime
 from enum import Enum
@@ -109,36 +112,49 @@ class JobMarketPostingInDB(MongoBaseModel):
 
     external_id: str = Field(min_length=1, max_length=200)
     dataset_version: str = MARKET_DATASET_VERSION
-    source: str = "mock"
+    source: str = Field(default="mock", pattern=r"^[a-z0-9][a-z0-9_-]{0,49}$")
+    # Provenance for genuinely imported postings. ``None`` for mock rows so
+    # the demo dataset cannot masquerade as a real source.
+    source_url: str | None = Field(default=None, max_length=1000)
+    source_license: str | None = Field(default=None, max_length=500)
+    imported_at: datetime | None = None
 
     company_name: str = Field(min_length=1, max_length=200)
     company_slug: str = Field(pattern=r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
-    company_industry: str = Field(min_length=1, max_length=200)
-    company_size: str = Field(min_length=1, max_length=100)
-    company_hq: str = Field(min_length=1, max_length=100)
-    company_website: str = Field(min_length=1, max_length=500)
+    # Public job-board APIs do not publish most of these company attributes.
+    # They are optional so an import records what is actually known instead of
+    # inventing headcount, HQ or a website. The demo generator still fills
+    # every field and the validator below enforces that for ``source="mock"``.
+    company_industry: str = Field(default="Not specified", min_length=1, max_length=200)
+    company_size: str | None = Field(default=None, max_length=100)
+    company_hq: str | None = Field(default=None, max_length=100)
+    company_website: str | None = Field(default=None, max_length=500)
 
     job_title: str = Field(min_length=1, max_length=200)
     job_family: JobFamily
-    seniority: SeniorityLevel
-    hiring_type: HiringType
+    seniority: SeniorityLevel | None = None
+    hiring_type: HiringType | None = None
     description: str = Field(min_length=1)
     jd_text: str = Field(min_length=1)
 
-    technical_skills: list[str] = Field(min_length=1)
-    soft_skills: list[str] = Field(min_length=1)
-    required_skills: list[str] = Field(min_length=1)
+    # Real public postings are only counted for skills that are explicitly
+    # present, so a posting may legitimately have no catalogued soft skill (or
+    # no catalogue match at all). The demo generator still enforces non-empty
+    # lists below so the curated mock dataset cannot silently lose coverage.
+    technical_skills: list[str] = Field(default_factory=list)
+    soft_skills: list[str] = Field(default_factory=list)
+    required_skills: list[str] = Field(default_factory=list)
 
-    min_experience_years: float = Field(ge=0, le=50)
-    education_level: str = Field(min_length=1, max_length=200)
-    eligible_departments: list[str] = Field(min_length=1)
-    min_cgpa: float = Field(ge=0, le=10)
+    min_experience_years: float | None = Field(default=None, ge=0, le=50)
+    education_level: str | None = Field(default=None, max_length=200)
+    eligible_departments: list[str] = Field(default_factory=list)
+    min_cgpa: float | None = Field(default=None, ge=0, le=10)
 
     location: str = Field(min_length=1, max_length=100)
-    work_mode: WorkMode
-    salary_band: str = Field(min_length=1, max_length=100)
-    salary_min_lpa: float = Field(ge=0)
-    salary_max_lpa: float = Field(ge=0)
+    work_mode: WorkMode | None = None
+    salary_band: str | None = Field(default=None, max_length=100)
+    salary_min_lpa: float | None = Field(default=None, ge=0)
+    salary_max_lpa: float | None = Field(default=None, ge=0)
 
     posted_at: datetime
     year: int = Field(ge=2000, le=2100)
@@ -183,11 +199,46 @@ class JobMarketPostingInDB(MongoBaseModel):
         expected_quarter = (self.posted_at.month - 1) // 3 + 1
         if self.quarter != expected_quarter:
             raise ValueError("quarter must match posted_at.month.")
-        if self.salary_min_lpa > self.salary_max_lpa:
+        if (
+            self.salary_min_lpa is not None
+            and self.salary_max_lpa is not None
+            and self.salary_min_lpa > self.salary_max_lpa
+        ):
             raise ValueError("salary_min_lpa cannot exceed salary_max_lpa.")
 
+        if self.source_url is not None and not self.source_url.startswith(
+            ("http://", "https://")
+        ):
+            raise ValueError("source_url must be an http(s) URL when provided.")
+
         if self.source == "mock":
-            host = urlparse(self.company_website).hostname or ""
+            if not self.technical_skills:
+                raise ValueError("Mock postings must list at least one technical skill.")
+            if not self.soft_skills:
+                raise ValueError("Mock postings must list at least one soft skill.")
+            if not self.eligible_departments:
+                raise ValueError("Mock postings must list at least one eligible department.")
+            required_mock_fields = {
+                "company_size": self.company_size,
+                "company_hq": self.company_hq,
+                "company_website": self.company_website,
+                "seniority": self.seniority,
+                "hiring_type": self.hiring_type,
+                "min_experience_years": self.min_experience_years,
+                "education_level": self.education_level,
+                "min_cgpa": self.min_cgpa,
+                "work_mode": self.work_mode,
+                "salary_band": self.salary_band,
+                "salary_min_lpa": self.salary_min_lpa,
+                "salary_max_lpa": self.salary_max_lpa,
+            }
+            missing = [name for name, value in required_mock_fields.items() if value is None]
+            if missing:
+                raise ValueError(
+                    "Mock postings must provide every curated field; missing: "
+                    + ", ".join(sorted(missing))
+                )
+            host = urlparse(self.company_website or "").hostname or ""
             if not host.endswith(".example"):
                 raise ValueError("Mock company websites must use a reserved .example domain.")
             if (
@@ -211,6 +262,7 @@ class JobMarketPostingInDB(MongoBaseModel):
 # ---------------------------------------------------------------------------
 
 TrendClassification = Literal["rising", "declining", "stable", "emerging"]
+DataOrigin = Literal["mock", "real", "mixed"]
 
 
 class MarketPeriodInfo(BaseModel):
@@ -220,6 +272,19 @@ class MarketPeriodInfo(BaseModel):
     start_month: int = Field(ge=1, le=12)
     end_month: int = Field(ge=1, le=12)
     label: str
+
+
+class MarketSourceInfo(BaseModel):
+    """Provenance of one market-data source present in the dataset."""
+
+    id: str
+    label: str
+    is_mock: bool
+    posting_count: int = Field(ge=0)
+    latest_posted_at: datetime | None = None
+    imported_at: datetime | None = None
+    license: str | None = None
+    homepage: str | None = None
 
 
 class MarketMeta(BaseModel):
@@ -235,6 +300,12 @@ class MarketMeta(BaseModel):
     previous_period: MarketPeriodInfo | None = None
     comparison_comparable: bool
     filtered_years: list[int]
+    # Provenance. ``sources`` lists every exact source id that produced the
+    # filtered figures; ``data_origin`` says whether they are demo, real or a
+    # deliberate mix. ``latest_import_at`` is the newest import timestamp.
+    sources: list[str] = Field(default_factory=list)
+    data_origin: DataOrigin = "mock"
+    latest_import_at: datetime | None = None
 
 
 class MarketSkillDemand(BaseModel):
@@ -272,11 +343,21 @@ class TrendingSkill(BaseModel):
 
 
 class YearlySkillDemand(BaseModel):
-    """One year of a skill's historical demand series."""
+    """One year of a skill's historical demand series.
+
+    ``posting_count`` / ``demand_pct`` are calendar-year totals. The
+    ``window_*`` pair restricts the same year to the comparable window used by
+    ``yoy_growth_pct`` (e.g. Jan-Nov when the latest year is partial), so a
+    trend chart can plot the exact basis the growth figure was computed on.
+    Plotting full calendar years against a partial latest year is what made a
+    declining skill look like it was rising.
+    """
 
     year: int
     posting_count: int = Field(ge=0)
     demand_pct: float = Field(ge=0, le=100)
+    window_posting_count: int = Field(ge=0)
+    window_demand_pct: float = Field(ge=0, le=100)
     yoy_growth_pct: float | None = None
 
 
@@ -325,9 +406,17 @@ class MarketFiltersResponse(BaseModel):
 
     years: list[int]
     companies: list[CompanyFilterOption]
+    # True number of distinct companies in the selected source group. The
+    # ``companies`` list is capped for payload size, so the UI can state when
+    # it is showing a subset instead of implying the list is complete.
+    company_total: int = 0
     job_families: list[str]
     locations: list[str]
+    # Same cap/total contract for locations, which are equally numerous in
+    # real archives.
+    location_total: int = 0
     skill_categories: list[str]
+    sources: list[MarketSourceInfo] = Field(default_factory=list)
 
 
 class MarketAnalyticsResponse(BaseModel):

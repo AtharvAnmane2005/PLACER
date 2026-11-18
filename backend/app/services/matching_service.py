@@ -173,7 +173,13 @@ class MatchingService:
         engine = self._engine()
         return engine.calibrate(engine.cross_score(pairs))
 
-    def _score_one_resume_vs_many_jds(self, resume: MatchCandidate, jds: list[MatchCandidate]) -> list[dict]:
+    def _score_one_resume_vs_many_jds(
+        self,
+        resume: MatchCandidate,
+        jds: list[MatchCandidate],
+        assessment_scores_by_id: dict[str, float] | None = None,
+        has_assessment: bool = False,
+    ) -> list[dict]:
         if not jds:
             return []
         calibrated = self._cross_score_pairs([(resume.text, jd.text) for jd in jds])
@@ -184,7 +190,13 @@ class MatchingService:
             missing = jd.skills - resume.skills
             skills_score = len(matched) / max(1, len(jd.skills))
             experience_score = exp_fit(resume.experience_years, jd.experience_years)
-            final_score = compute_final_score(float(sem), skills_score, experience_score)
+            final_score = compute_final_score(
+                float(sem),
+                skills_score,
+                experience_score,
+                assessment_score_pct=(assessment_scores_by_id or {}).get(jd.id),
+                has_assessment=has_assessment,
+            )
             results.append(
                 {
                     "candidate_id": jd.id,
@@ -198,7 +210,13 @@ class MatchingService:
             )
         return results
 
-    def _score_one_jd_vs_many_resumes(self, jd: MatchCandidate, resumes: list[MatchCandidate]) -> list[dict]:
+    def _score_one_jd_vs_many_resumes(
+        self,
+        jd: MatchCandidate,
+        resumes: list[MatchCandidate],
+        assessment_scores_by_id: dict[str, float] | None = None,
+        has_assessment: bool = False,
+    ) -> list[dict]:
         if not resumes:
             return []
         calibrated = self._cross_score_pairs([(resume.text, jd.text) for resume in resumes])
@@ -209,7 +227,16 @@ class MatchingService:
             missing = jd.skills - resume.skills
             skills_score = len(matched) / max(1, len(jd.skills))  # denominator is always the JD's skill count
             experience_score = exp_fit(resume.experience_years, jd.experience_years)
-            final_score = compute_final_score(float(sem), skills_score, experience_score)
+            # Assessment is per-applicant (keyed by resume id, the candidate id
+            # of this direction). Without it the ranking would silently drop
+            # the 10% assessment component that screening applies.
+            final_score = compute_final_score(
+                float(sem),
+                skills_score,
+                experience_score,
+                assessment_score_pct=(assessment_scores_by_id or {}).get(resume.id),
+                has_assessment=has_assessment,
+            )
             results.append(
                 {
                     "candidate_id": resume.id,
@@ -242,11 +269,22 @@ class MatchingService:
     # "resume-scoring endpoint" the handoff described.
     # ------------------------------------------------------------------
     async def score_resume_against_drive(
-        self, resume: ResumeInDB, drive: PlacementDriveInDB, company_name: str
+        self,
+        resume: ResumeInDB,
+        drive: PlacementDriveInDB,
+        company_name: str,
+        assessment_score_pct: float | None = None,
+        has_assessment: bool = False,
     ) -> dict:
         resume_candidate = await self._get_resume_candidate(resume)
         drive_candidate = await self._get_drive_candidate(drive, company_name)
-        return self._score_one_resume_vs_many_jds(resume_candidate, [drive_candidate])[0]
+        assessment_map = {drive_candidate.id: assessment_score_pct} if assessment_score_pct is not None else None
+        return self._score_one_resume_vs_many_jds(
+            resume_candidate,
+            [drive_candidate],
+            assessment_scores_by_id=assessment_map,
+            has_assessment=has_assessment,
+        )[0]
 
     # ------------------------------------------------------------------
     # Phase 9: rank many drives for one resume ("recommended for you"),
@@ -273,10 +311,17 @@ class MatchingService:
         company_name: str,
         resumes: list[ResumeInDB],
         retriever_pool: int = DEFAULT_RETRIEVER_POOL,
+        assessment_scores_by_resume_id: dict[str, float] | None = None,
+        has_assessment: bool = False,
     ) -> list[dict]:
         drive_candidate = await self._get_drive_candidate(drive, company_name)
         resume_candidates = [await self._get_resume_candidate(r) for r in resumes]
 
         retrieved = self._retrieve_top_k(drive_candidate, resume_candidates, retriever_pool)
-        results = self._score_one_jd_vs_many_resumes(drive_candidate, retrieved)
+        results = self._score_one_jd_vs_many_resumes(
+            drive_candidate,
+            retrieved,
+            assessment_scores_by_id=assessment_scores_by_resume_id,
+            has_assessment=has_assessment,
+        )
         return sorted(results, key=lambda r: r["final_score"], reverse=True)

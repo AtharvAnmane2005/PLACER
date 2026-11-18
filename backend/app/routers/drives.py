@@ -1,10 +1,11 @@
 import csv
 import io
 from datetime import datetime
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from app.core.database import get_database
+from app.core.departments import department_label
 from app.core.deps import CurrentUser, get_current_user, require_role
 from app.models.drive import (
     ApplicationDetail,
@@ -95,6 +96,8 @@ def _to_application_response(application) -> ApplicationResponse:
         rejection_reasons=getattr(application, "rejection_reasons", []),
         rejection_note=getattr(application, "rejection_note", None),
         decision_at=getattr(application, "decision_at", None),
+        data_origin=getattr(application, "data_origin", "genuine"),
+        is_synthetic=getattr(application, "is_synthetic", False),
     )
 
 
@@ -105,7 +108,7 @@ async def _to_application_detail(application, db: AsyncIOMotorDatabase) -> Appli
     return ApplicationDetail(
         **base.model_dump(),
         student_name=student.name if student else "Unknown student",
-        student_department=student.department if student else None,
+        student_department=department_label(student.department) if student else None,
         student_cgpa=student.cgpa if student else None,
         resume_filename=resume.original_filename if resume else None,
     )
@@ -321,16 +324,20 @@ async def get_drive_applications(
     eligible_only: bool = False,
     sort_by: str = "applied_at",
     sort_order: str = "desc",
-    current_user: CurrentUser = Depends(require_role("tpo")),
+    current_user: CurrentUser = Depends(require_role("tpo", "admin")),
     db: AsyncIOMotorDatabase = Depends(get_database),
 ):
     drive = await PlacementDriveRepository(db).get_by_id(drive_id)
     if not drive:
         raise HTTPException(status_code=404, detail="Drive not found.")
 
-    tpo = await TPORepository(db).get_by_user_id(current_user.id)
-    if not tpo or drive.created_by != tpo.id:
-        raise HTTPException(status_code=403, detail="You do not have permission to view these applications.")
+    # Admins oversee every drive; a TPO may only read its own drive's
+    # applications. This matches the write path, which already lets admins
+    # manage status on any drive.
+    if current_user.role != "admin":
+        tpo = await TPORepository(db).get_by_user_id(current_user.id)
+        if not tpo or drive.created_by != tpo.id:
+            raise HTTPException(status_code=403, detail="You do not have permission to view these applications.")
 
     # Reconcile any expired assessments lazily
     await ScreeningService(db).reconcile_expired_assessments(drive)
@@ -354,10 +361,12 @@ async def get_drive_applications(
 async def bulk_update_application_status(
     drive_id: str,
     payload: BulkApplicationStatusRequest,
-    current_user: CurrentUser = Depends(require_role("tpo")),
+    request: Request,
+    current_user: CurrentUser = Depends(require_role("tpo", "admin")),
     db: AsyncIOMotorDatabase = Depends(get_database),
 ):
     service = DriveService(db)
+    client_ip = request.client.host if request.client else None
     updated_count = 0
     failed_ids = []
     errors = []
@@ -371,6 +380,8 @@ async def bulk_update_application_status(
                 payload.status.value,
                 rejection_reasons=payload.rejection_reasons,
                 rejection_note=payload.rejection_note,
+                actor_role=current_user.role,
+                ip_address=client_ip,
             )
             updated_count += 1
         except Exception as exc:
@@ -454,10 +465,12 @@ async def update_application_status(
     drive_id: str,
     application_id: str,
     payload: ApplicationStatusUpdateRequest,
-    current_user: CurrentUser = Depends(require_role("tpo")),
+    request: Request,
+    current_user: CurrentUser = Depends(require_role("tpo", "admin")),
     db: AsyncIOMotorDatabase = Depends(get_database),
 ):
     service = DriveService(db)
+    client_ip = request.client.host if request.client else None
     try:
         application = await service.update_application_status(
             current_user.id,
@@ -466,6 +479,8 @@ async def update_application_status(
             payload.status.value,
             rejection_reasons=payload.rejection_reasons,
             rejection_note=payload.rejection_note,
+            actor_role=current_user.role,
+            ip_address=client_ip,
         )
     except DriveError as exc:
         raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc

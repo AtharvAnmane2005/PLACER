@@ -9,15 +9,17 @@
  * - Trend classifications (rising / declining / stable / emerging) always
  *   come from the backend's `trend` field.
  * - Growth values always come from the backend's `yoy_growth_pct` fields,
- *   which are only computed between COMPARABLE windows (Jan-Oct pair for the
- *   dataset's partial latest year, full years otherwise). A `null` growth
- *   means "no comparable previous period" and is never treated as zero.
+ *   which are only computed between COMPARABLE windows (the same data-driven
+ *   month range in consecutive years, e.g. Jan-Nov when the latest year is
+ *   partial; full years otherwise). A `null` growth means "no comparable
+ *   previous period" and is never treated as zero.
  *
  * The only NEW logic here is presentation-level ranking/classification of
  * what the backend already measured. Its formulas are documented on each
  * export and are deterministic (stable tie-breaking by skill name).
  */
 
+import { formatSignedPercent } from "@/lib/format";
 import type {
   CompanyMarketAnalytics,
   EmergingSkill,
@@ -40,7 +42,7 @@ export const RARE_MARKET_WIDE_THRESHOLD = 0.05;
 export type EmergingClass =
   | "newly-emerging"
   | "fast-growing"
-  | "consistently-growing"
+  | "growing-across-periods"
   | "recently-accelerating"
   | "rising"
   | "stable"
@@ -48,10 +50,14 @@ export type EmergingClass =
 
 export interface EmergingSeriesPoint {
   year: number;
-  /** Backend demand share for that year. */
+  /** Backend demand share for that year (calendar-year basis). */
   demandPct: number;
-  /** Backend posting count for that year. */
+  /** Backend posting count for that year (calendar-year basis). */
   postingCount: number;
+  /** Postings inside the comparable window used by `yoyGrowthPct`. */
+  windowPostingCount: number;
+  /** Demand share inside the comparable window used by `yoyGrowthPct`. */
+  windowDemandPct: number;
   /** Backend growth between comparable windows ending at that year. */
   yoyGrowthPct: number | null;
 }
@@ -84,6 +90,8 @@ function growthSeries(history: HistoricalSkillTrend | undefined): EmergingSeries
     year: year.year,
     demandPct: year.demand_pct,
     postingCount: year.posting_count,
+    windowPostingCount: year.window_posting_count,
+    windowDemandPct: year.window_demand_pct,
     yoyGrowthPct: year.yoy_growth_pct,
   }));
 }
@@ -97,10 +105,12 @@ function growthSeries(history: HistoricalSkillTrend | undefined): EmergingSeries
  *    filter-excluded previous periods therefore never produce this label.
  * 2. insufficient-data — the backend's latest comparable growth is null.
  * 3. fast-growing — latest comparable growth >= +25%.
- * 4. consistently-growing — the skill's historical series has at least 2
- *    comparable period-over-period growth values (backend) and every one of
- *    them is > 0 (the 1st dataset year has no comparable predecessor, so its
- *    null growth is simply skipped, not read as zero).
+ * 4. growing-across-periods — the skill's historical series has at least 2
+ *    comparable period-over-period growth values (backend), every one of them
+ *    is > 0, and the latest period is not a partial window (mixed windows are
+ *    not comparable, so no sustained-growth claim is made for them). The 1st
+ *    dataset year has no comparable predecessor and is skipped, not read as
+ *    zero.
  * 5. recently-accelerating — the latest two comparable growth values both
  *    exist and the latest is strictly greater than the preceding one.
  * 6. rising — backend classification `rising` (growth >= +10%, not fast).
@@ -111,7 +121,8 @@ export function classifyEmergingCandidate(
   isEmerging: boolean,
   trend: TrendClassification | null,
   growthPct: number | null,
-  series: EmergingSeriesPoint[]
+  series: EmergingSeriesPoint[],
+  meta?: MarketMeta
 ): EmergingClass {
   if (isEmerging && trend === "emerging") return "newly-emerging";
   if (growthPct == null) return "insufficient-data";
@@ -119,8 +130,12 @@ export function classifyEmergingCandidate(
   const growths = series
     .map((point) => point.yoyGrowthPct)
     .filter((value): value is number => value != null);
-  if (growths.length >= 2 && growths.every((value) => value > 0)) {
-    return "consistently-growing";
+  if (
+    growths.length >= 2 &&
+    growths.every((value) => value > 0) &&
+    meta?.is_partial_year === false
+  ) {
+    return "growing-across-periods";
   }
   const latest = growths[growths.length - 1];
   const preceding = growths[growths.length - 2];
@@ -141,7 +156,8 @@ export function classifyEmergingCandidate(
 export function buildEmergingCandidates(
   trending: TrendingSkill[],
   emerging: EmergingSkill[],
-  historical: HistoricalSkillTrend[]
+  historical: HistoricalSkillTrend[],
+  meta?: MarketMeta
 ): EmergingCandidate[] {
   const emergingBySlug = new Map(emerging.map((skill) => [skill.slug, skill]));
   const historyBySlug = new Map(historical.map((entry) => [entry.slug, entry]));
@@ -167,7 +183,8 @@ export function buildEmergingCandidates(
         isEmerging,
         skill.trend,
         skill.yoy_growth_pct,
-        series
+        series,
+        meta
       ),
       currentCount: skill.current_period_count,
       previousCount: skill.previous_period_count,
@@ -281,9 +298,9 @@ export function rankEmergingCandidates(
   return sorted;
 }
 
-/** Signed growth formatter ("+12.5%", "-3%", never used for null values). */
+/** Signed growth formatter, delegated to the shared numeric formatter. */
 export function formatSignedGrowth(value: number): string {
-  return `${value > 0 ? "+" : ""}${value}%`;
+  return formatSignedPercent(value, 1);
 }
 
 /**
@@ -298,7 +315,7 @@ export function trendExplanation(skill: TrendingSkill): string {
     case "emerging":
       return "The skill appeared in the current period but not in the comparable previous period.";
     case "rising":
-      return `Demand increased by ${skill.yoy_growth_pct}% compared with the previous comparable period.`;
+      return `Demand increased by ${Math.abs(skill.yoy_growth_pct)}% compared with the previous comparable period.`;
     case "declining":
       return `Demand decreased by ${Math.abs(skill.yoy_growth_pct)}% compared with the previous comparable period.`;
     case "stable":
@@ -324,11 +341,12 @@ export interface TrendObservationInput {
  *    trending skills (null growths ignored).
  * 2. Highest demand — max `posting_count` among the listed trending skills.
  * 3. Sustained growth — over ALL `historical_trends` (not just the trending
- *    list): at least 2 non-null comparable growth values and every one > 0.
+ *    list): at least 2 non-null comparable growth values, every one > 0, and
+ *    no partial latest year in the filtered range.
  * 4. Losing demand — backend classification `declining` among trending skills.
  * 5. Stable demand — backend classification `stable` among trending skills.
- * 6. Multi-family reach — skills required by >= 2 job families, counted
- *    among each family's TOP SKILLS (the API supplies the top 10 per family).
+ * 6. Multi-domain reach — skills required by >= 2 domains, counted
+ *    among each domain's TOP SKILLS (the API supplies the top 10 per domain).
  * 7. Company concentration — for a skill, max posting_count that any single
  *    company's top-skills list reports, divided by the skill's total postings
  *    across the filtered years (sum of its historical yearly counts); shown
@@ -369,6 +387,9 @@ export function buildTrendObservations(input: TrendObservationInput): string[] {
   }
 
   // 3. Sustained growth across all comparable periods (every in-scope skill).
+  // A partial latest year is omitted entirely: the comparable data-driven
+  // windows are real data, but the summarized decision for this app is to
+  // avoid a sustained-growth claim when the range ends mid-year.
   const sustained = historical
     .map((entry) => {
       const growths = entry.years
@@ -378,7 +399,9 @@ export function buildTrendObservations(input: TrendObservationInput): string[] {
     })
     .filter(
       (entry) =>
-        entry.growths.length >= 2 && entry.growths.every((value) => value > 0)
+        meta?.is_partial_year === false &&
+        entry.growths.length >= 2 &&
+        entry.growths.every((value) => value > 0)
     )
     .sort((a, b) => {
       const latestA = a.growths[a.growths.length - 1] ?? 0;
@@ -386,8 +409,9 @@ export function buildTrendObservations(input: TrendObservationInput): string[] {
       return latestB - latestA || a.name.localeCompare(b.name);
     });
   if (sustained.length > 0) {
+    const names = formatNameList(sustained.map((entry) => entry.name));
     observations.push(
-      `${formatNameList(sustained.map((entry) => entry.name))} grew in every comparable period available under the current filters.`
+      `${names} increased in each comparable period available under the current filters.`
     );
   }
 
@@ -407,7 +431,7 @@ export function buildTrendObservations(input: TrendObservationInput): string[] {
     );
   }
 
-  // 6. Skills demanded across multiple job families (per-family top skills).
+  // 6. Skills demanded across multiple domains (per-domain top skills).
   if (families.length > 0) {
     const familyReach = historical
       .map((entry) => ({
@@ -423,9 +447,9 @@ export function buildTrendObservations(input: TrendObservationInput): string[] {
       );
     if (familyReach.length > 0) {
       observations.push(
-        `Skills demanded across multiple job families (counted among each family's top skills): ${familyReach
+        `Skills demanded across multiple domains (counted among each domain's top skills): ${familyReach
           .slice(0, 5)
-          .map((entry) => `${entry.name} (${entry.familyCount} of ${families.length} families)`)
+          .map((entry) => `${entry.name} (${entry.familyCount} of ${families.length} domains)`)
           .join(", ")}${familyReach.length > 5 ? `, and ${familyReach.length - 5} more` : ""}.`
       );
     }
@@ -489,7 +513,7 @@ function formatNameList(names: string[], cap = 5): string {
 }
 
 // ---------------------------------------------------------------------------
-// Entity-comparison derivations (Phase 5) — company or job-family selections
+// Entity-comparison derivations (Phase 5) — company or domain selections
 // ---------------------------------------------------------------------------
 
 export interface MatrixCell {

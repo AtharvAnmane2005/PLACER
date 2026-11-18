@@ -20,6 +20,12 @@ import type { MarketFiltersResponse } from "@/types/market-analytics";
  */
 
 export interface SkillGapFiltersState {
+  /**
+   * Data-source group. Skill gaps are always computed against real imported
+   * postings: "real" (all public sources) or one exact real source id.
+   * The backend's demo/mock population is intentionally not selectable.
+   */
+  source: string | null;
   /** Posting-population filters — these change what demand is counted on. */
   year_from: number | null;
   year_to: number | null;
@@ -34,6 +40,8 @@ export interface SkillGapFiltersState {
 }
 
 export const DEFAULT_SKILL_GAP_FILTERS: SkillGapFiltersState = {
+  // Always analyse real imported public postings; never the fictional demo set.
+  source: "real",
   year_from: null,
   year_to: null,
   company: null,
@@ -46,6 +54,7 @@ export const DEFAULT_SKILL_GAP_FILTERS: SkillGapFiltersState = {
 
 function buildQueryParams(filters: SkillGapFiltersState): SkillGapParams {
   const params: SkillGapParams = { sort: filters.sort };
+  if (filters.source) params.source = filters.source;
   if (filters.year_from != null) params.year_from = filters.year_from;
   if (filters.year_to != null) params.year_to = filters.year_to;
   if (filters.company) params.company = filters.company;
@@ -72,13 +81,14 @@ export function useSkillGaps(filters: SkillGapFiltersState) {
 }
 
 /** Same live filter options the Market Insights dashboard derives. */
-export function useSkillGapFilterOptions() {
+export function useSkillGapFilterOptions(source: string | null = null) {
   return useQuery({
-    queryKey: ["skill-gaps", "filters"] as const,
+    queryKey: ["skill-gaps", "filters", source] as const,
     staleTime: 5 * 60 * 1000,
     queryFn: async () => {
       const { data } = await apiClient.get<MarketFiltersResponse>(
-        "/analytics/tpo/skill-gaps/filters"
+        "/analytics/tpo/skill-gaps/filters",
+        { params: source ? { source } : undefined }
       );
       return data;
     },

@@ -171,6 +171,8 @@ class StudentProfileResponse(BaseModel):
     certificates: list[str]
     active_resume_id: str | None
     profile_completeness_pct: float
+    data_origin: str = "genuine"
+    is_synthetic: bool = False
 
 
 class StudentProfileUpdateRequest(BaseModel):

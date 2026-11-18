@@ -19,7 +19,7 @@ export default function TpoDrivesPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="font-display text-2xl font-semibold">My drives</h1>
           <p className="text-sm text-muted-foreground">All placement drives you&apos;ve created.</p>
@@ -56,14 +56,19 @@ export default function TpoDrivesPage() {
               <Card className="h-full transition-colors hover:border-primary">
                 <CardHeader>
                   <div className="flex items-start justify-between gap-2">
-                    <CardTitle className="text-base">{drive.job_title}</CardTitle>
-                    <Badge variant={drive.status === "open" ? "success" : "secondary"}>{drive.status}</Badge>
+                    <CardTitle className="min-w-0 truncate text-base">{drive.job_title}</CardTitle>
+                    <Badge
+                      variant={drive.status === "open" ? "success" : "secondary"}
+                      className="shrink-0"
+                    >
+                      {drive.status}
+                    </Badge>
                   </div>
-                  <p className="text-sm text-muted-foreground">{drive.company.name}</p>
+                  <p className="truncate text-sm text-muted-foreground">{drive.company.name}</p>
                 </CardHeader>
                 <CardContent className="space-y-1 text-sm text-muted-foreground">
-                  {drive.location && <div>{drive.location}</div>}
-                  {drive.package && <div>Package: {drive.package}</div>}
+                  {drive.location && <div className="truncate">{drive.location}</div>}
+                  {drive.package && <div className="truncate">Package: {drive.package}</div>}
                   <div>Deadline: {formatDeadline(drive.deadline)}</div>
                 </CardContent>
               </Card>

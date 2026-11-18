@@ -21,6 +21,12 @@ import type {
  */
 
 export interface MarketFiltersState {
+  /**
+   * Data-source group. The TPO dashboard always analyses real imported
+   * postings: "real" (all public sources) or one exact real source id.
+   * The backend's demo/mock population is intentionally not selectable.
+   */
+  source: string | null;
   /** Posting-population filters — these change what is counted. */
   year_from: number | null;
   year_to: number | null;
@@ -36,6 +42,8 @@ export interface MarketFiltersState {
 }
 
 export const DEFAULT_MARKET_FILTERS: MarketFiltersState = {
+  // Always analyse real imported public postings; never the fictional demo set.
+  source: "real",
   year_from: null,
   year_to: null,
   company: null,
@@ -59,6 +67,7 @@ function buildQueryParams(filters: MarketFiltersState): MarketAnalyticsParams {
     sort: filters.sort,
     limit: filters.limit,
   };
+  if (filters.source) params.source = filters.source;
   if (filters.year_from != null) params.year_from = filters.year_from;
   if (filters.year_to != null) params.year_to = filters.year_to;
   if (filters.company) params.company = filters.company;
@@ -82,7 +91,7 @@ export interface MarketComparisonRequest {
    */
   filters: Pick<
     MarketFiltersState,
-    "year_from" | "year_to" | "company" | "job_family" | "location"
+    "source" | "year_from" | "year_to" | "company" | "job_family" | "location"
   >;
 }
 
@@ -95,6 +104,7 @@ function buildComparisonParams(
     dimension: request.dimension,
     entities: entityKeys.join(","),
   };
+  if (request.filters.source) params.source = request.filters.source;
   if (request.filters.year_from != null) params.year_from = request.filters.year_from;
   if (request.filters.year_to != null) params.year_to = request.filters.year_to;
   if (request.filters.location) params.location = request.filters.location;
@@ -126,12 +136,13 @@ export function useMarketAnalytics(filters: MarketFiltersState) {
   });
 }
 
-export function useMarketFilters() {
+export function useMarketFilters(source: string | null = null) {
   return useQuery({
-    queryKey: MARKET_FILTERS_KEY,
+    queryKey: [...MARKET_FILTERS_KEY, source] as const,
     queryFn: async () => {
       const { data } = await apiClient.get<MarketFiltersResponse>(
-        "/analytics/tpo/market/filters"
+        "/analytics/tpo/market/filters",
+        { params: source ? { source } : undefined }
       );
       return data;
     },

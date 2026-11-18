@@ -80,7 +80,7 @@ function StudentRegisterForm() {
         <PasswordInput id="password" {...register("password")} />
         {errors.password && <p className="text-sm text-destructive">{errors.password.message}</p>}
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="space-y-2">
           <Label htmlFor="department">Department</Label>
           <Combobox
@@ -153,7 +153,7 @@ function TPORegisterForm() {
       </div>
       <div className="space-y-2">
         <Label htmlFor="department_scope">Departments you manage (comma-separated)</Label>
-        <Input id="department_scope" placeholder="Computer Science, Electronics" {...register("department_scope")} />
+        <Input id="department_scope" placeholder="Computer Science, Information Technology" {...register("department_scope")} />
       </div>
       {errors.root && <p className="text-sm text-destructive">{errors.root.message}</p>}
       <Button type="submit" className="w-full" disabled={isSubmitting}>
