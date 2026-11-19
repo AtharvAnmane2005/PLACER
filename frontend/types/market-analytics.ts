@@ -67,6 +67,8 @@ export interface MarketSummary {
   distinct_skill_count: number;
   most_demanded_skill: MarketSkillDemand | null;
   yoy_posting_growth_pct: number | null;
+  /** Exact basis of the growth figure, e.g. "Full year 2025 vs 2024 (latest complete years)". */
+  yoy_growth_basis: string | null;
 }
 
 export interface TrendingSkill {
@@ -79,6 +81,8 @@ export interface TrendingSkill {
   trend_score: number;
   trend: TrendClassification | null;
   yoy_growth_pct: number | null;
+  /** Change in demand share vs the previous comparable period, in percentage points. */
+  momentum_pct: number | null;
   current_period_count: number;
   previous_period_count: number;
   yearly_counts: Record<string, number>;

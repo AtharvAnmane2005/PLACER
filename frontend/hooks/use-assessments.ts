@@ -1,13 +1,16 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { apiClient } from "@/lib/api-client";
 import type {
   AssessmentResponse,
   AttemptQuestionsResponse,
   AttemptResultResponse,
+  AttemptReviewResponse,
   CodeRunSummary,
   FinishAttemptResponse,
   KnowledgeStateResponse,
+  ManualGradeResponse,
+  PendingReviewItem,
   StartAttemptResponse,
   StudentInsightsResponse,
   SubmitAnswerResponse,
@@ -180,6 +183,63 @@ export function useRunCode() {
         }
       );
       return data.code_result;
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Manual review of descriptive answers (TPO/admin)
+// ---------------------------------------------------------------------------
+export function usePendingReviews() {
+  return useQuery({
+    queryKey: ["assessments", "review", "pending"],
+    queryFn: async () => {
+      const { data } = await apiClient.get<PendingReviewItem[]>("/assessments/review/pending");
+      return data;
+    },
+  });
+}
+
+export function useAttemptReview(attemptId: string | null) {
+  return useQuery({
+    queryKey: ["assessments", "attempts", attemptId, "review"],
+    queryFn: async () => {
+      const { data } = await apiClient.get<AttemptReviewResponse>(
+        `/assessments/attempts/${attemptId}/review`
+      );
+      return data;
+    },
+    enabled: Boolean(attemptId),
+  });
+}
+
+export function useGradeDescriptive() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (payload: {
+      attemptId: string;
+      questionId: string;
+      marksAwarded: number;
+      feedback?: string;
+    }) => {
+      const { data } = await apiClient.post<ManualGradeResponse>(
+        `/assessments/attempts/${payload.attemptId}/grade`,
+        {
+          question_id: payload.questionId,
+          marks_awarded: payload.marksAwarded,
+          feedback: payload.feedback ?? null,
+        }
+      );
+      return data;
+    },
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ["assessments", "review", "pending"] });
+      queryClient.invalidateQueries({
+        queryKey: ["assessments", "attempts", variables.attemptId, "review"],
+      });
+      queryClient.invalidateQueries({
+        queryKey: ["assessments", "attempts", variables.attemptId, "results"],
+      });
     },
   });
 }

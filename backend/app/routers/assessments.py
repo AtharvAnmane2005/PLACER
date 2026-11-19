@@ -17,11 +17,15 @@ from app.models.assessment import (
     AttemptAnswerDetail,
     AttemptQuestionsResponse,
     AttemptResultResponse,
+    AttemptReviewResponse,
     AttemptStatus,
     CodeRunSummary,
     FinishAttemptRequest,
     FinishAttemptResponse,
     KnowledgeStateResponse,
+    ManualGradeRequest,
+    ManualGradeResponse,
+    PendingReviewItem,
     PlacementEligibilityResponse,
     PlacementGenerationRequest,
     PlacementGenerationResponse,
@@ -251,6 +255,12 @@ async def create_assessment(
         "max_violations": payload.max_violations,
         "require_fullscreen": payload.require_fullscreen,
     }
+    # Adaptive attempts ask at most ``question_pool_size`` questions, so store
+    # the best-case mark total now instead of leaving it at 0 until grading.
+    service = AssessmentService(db)
+    total_marks = await service.compute_adaptive_total_marks(
+        payload.category_ids, payload.question_pool_size
+    )
     assessment = await AssessmentRepository(db).create(
         {
             "title": payload.title,
@@ -265,6 +275,7 @@ async def create_assessment(
             "instructions": payload.instructions,
             "allow_retake": payload.allow_retake,
             "negative_marks": payload.negative_marks,
+            "total_marks": total_marks,
         }
     )
     return _to_assessment_response(assessment)
@@ -591,6 +602,8 @@ async def get_attempt_results(
                 correct_answer=question.correct_answer if revealed and question else None,
                 explanation=question.explanation if revealed and question else None,
                 section=section_by_question.get(answer.question_id),
+                graded_at=answer.graded_at,
+                feedback=answer.feedback,
             )
         )
 
@@ -604,3 +617,48 @@ async def get_attempt_results(
         submitted_at=attempt.submitted_at,
         answers=answer_details,
     )
+
+
+# ---------------------------------------------------------------------------
+# Manual review of descriptive answers (TPO/admin)
+# ---------------------------------------------------------------------------
+@router.get("/review/pending", response_model=list[PendingReviewItem])
+async def pending_descriptive_reviews(
+    current_user: CurrentUser = Depends(require_role("tpo", "admin")),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    return await AssessmentService(db).pending_reviews(current_user.role, current_user.id)
+
+
+@router.get("/attempts/{attempt_id}/review", response_model=AttemptReviewResponse)
+async def get_attempt_review(
+    attempt_id: str,
+    current_user: CurrentUser = Depends(require_role("tpo", "admin")),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    try:
+        return await AssessmentService(db).get_review(
+            attempt_id, current_user.role, current_user.id
+        )
+    except AssessmentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+
+@router.post("/attempts/{attempt_id}/grade", response_model=ManualGradeResponse)
+async def grade_descriptive_answer(
+    attempt_id: str,
+    payload: ManualGradeRequest,
+    current_user: CurrentUser = Depends(require_role("tpo", "admin")),
+    db: AsyncIOMotorDatabase = Depends(get_database),
+):
+    try:
+        return await AssessmentService(db).grade_descriptive(
+            attempt_id,
+            current_user.role,
+            current_user.id,
+            payload.question_id,
+            payload.marks_awarded,
+            payload.feedback,
+        )
+    except AssessmentError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc

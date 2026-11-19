@@ -40,8 +40,10 @@ export function MarketSummaryCards({
   }
 
   // YoY growth is only meaningful when a comparable previous period exists.
-  // With a single-year dataset, show the real coverage period instead of N/A.
-  const comparable = meta?.comparison_comparable ?? false;
+  // The backend now reports the exact basis it used (latest complete years
+  // when the newest year is still partial), so the card never compares a
+  // half-finished year against a full one.
+  const hasGrowth = summary.yoy_posting_growth_pct != null;
   const periodLabel = meta?.current_period?.label;
 
   return (
@@ -63,12 +65,18 @@ export function MarketSummaryCards({
             "—"
           )
         }
+        hint={
+          meta?.comparison_comparable && periodLabel
+            ? `Share of ${periodLabel} postings`
+            : "Share of all filtered postings"
+        }
         icon={Trophy}
       />
-      {comparable ? (
+      {hasGrowth ? (
         <StatCard
           label="YoY posting growth"
           value={formatSignedPercent(summary.yoy_posting_growth_pct, 1)}
+          hint={summary.yoy_growth_basis ?? undefined}
           icon={TrendingUp}
         />
       ) : (
@@ -76,7 +84,7 @@ export function MarketSummaryCards({
           label="Posting period"
           value={periodLabel ?? "—"}
           valueClassName="text-lg"
-          hint="Single-year dataset"
+          hint="No complete prior period to compare"
           icon={CalendarDays}
         />
       )}

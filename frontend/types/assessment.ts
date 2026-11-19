@@ -154,6 +154,9 @@ export interface AttemptAnswerDetail {
   correct_answer: string | null;
   explanation: string | null;
   section: string | null;
+  /** Descriptive answers: null until a TPO/admin reviewer grades them. */
+  graded_at: string | null;
+  feedback: string | null;
 }
 
 export interface AttemptResultResponse {
@@ -172,6 +175,60 @@ export interface KnowledgeStateResponse {
   mastery_pct: number;
   confidence: number;
   attempts_count: number;
+}
+
+// ---------------------------------------------------------------------------
+// Manual review of descriptive answers (TPO/admin)
+// ---------------------------------------------------------------------------
+export interface PendingReviewItem {
+  attempt_id: string;
+  assessment_id: string;
+  assessment_title: string;
+  assessment_type: AssessmentType;
+  drive_id: string | null;
+  student_id: string;
+  student_name: string | null;
+  submitted_at: string | null;
+  pending_count: number;
+  total_answers: number;
+}
+
+export interface AttemptReviewAnswer {
+  question_id: string;
+  question_text: string;
+  response: string;
+  max_marks: number;
+  marks_awarded: number;
+  is_correct: boolean | null;
+  graded_at: string | null;
+  feedback: string | null;
+  skill_tags: string[];
+}
+
+export interface AttemptReviewResponse {
+  attempt_id: string;
+  assessment_id: string;
+  assessment_title: string;
+  assessment_type: AssessmentType;
+  drive_id: string | null;
+  student_id: string;
+  student_name: string | null;
+  status: AttemptStatus;
+  submitted_at: string | null;
+  pending_count: number;
+  total_marks: number;
+  max_possible_marks: number;
+  answers: AttemptReviewAnswer[];
+}
+
+export interface ManualGradeResponse {
+  attempt_id: string;
+  question_id: string;
+  marks_awarded: number;
+  is_correct: boolean;
+  pending_count: number;
+  total_marks: number;
+  max_possible_marks: number;
 }
 
 // ---------------------------------------------------------------------------

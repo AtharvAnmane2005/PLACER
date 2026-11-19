@@ -1071,8 +1071,9 @@ The per-drive Ranking / Applied students / Test participants panels live inside 
 
 | Chart | Source field | Processing |
 |---|---|---|
-| Summary cards | `GET /analytics/tpo/market` → summary | Posting counts, company counts, skill counts, year range |
-| Historical trends | `historical_trends` | Postings per year/month |
+| Summary cards | `GET /analytics/tpo/market` → summary | Posting counts, company counts, skill counts, current-period most-demanded skill, complete-year YoY growth with `yoy_growth_basis` |
+| Historical trends | `historical_trends` | Postings per year/month on the comparable window |
+| Trending skills | `trending_skills` | Ranked by demand-share momentum (`momentum_pct`); declining skills last |
 | Emerging skills | `emerging_skills` | Growth comparison across comparable windows |
 | Company analytics | `companies` | Posting counts and skill mix per company |
 | Job-family section | `job_families` | Distribution by job family |

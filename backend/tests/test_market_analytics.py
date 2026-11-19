@@ -121,6 +121,23 @@ def _best_skill(expected_counts: Counter):
     return min(expected_counts.items(), key=lambda item: (-item[1], item[0]))
 
 
+def _best_current_skill(postings, expected_counts, year=2026, months=(1, 10)):
+    """Most demanded skill in the current comparable window.
+
+    Mirrors the summary rule: current-window count first, all-time posting
+    count as the tie-breaker, then the skill name for a deterministic order.
+    """
+    current: Counter = Counter()
+    for posting in postings:
+        if posting["year"] == year and months[0] <= posting["month"] <= months[1]:
+            for skill in _skills_of(posting):
+                current[skill] += 1
+    return min(
+        current.items(),
+        key=lambda item: (-item[1], -expected_counts[item[0]], item[0]),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Authorization
 # ---------------------------------------------------------------------------
@@ -183,6 +200,7 @@ async def test_tpo_gets_full_market_analytics_shape(client, mock_mongo, dataset)
         "distinct_skill_count",
         "most_demanded_skill",
         "yoy_posting_growth_pct",
+        "yoy_growth_basis",
     }
     assert set(body["trending_skills"][0]) == {
         "name",
@@ -194,6 +212,7 @@ async def test_tpo_gets_full_market_analytics_shape(client, mock_mongo, dataset)
         "trend_score",
         "trend",
         "yoy_growth_pct",
+        "momentum_pct",
         "current_period_count",
         "previous_period_count",
         "yearly_counts",
@@ -224,21 +243,29 @@ async def test_summary_statistics_match_dataset(client, mock_mongo, dataset):
     summary = body["summary"]
 
     expected_counts = _expected_skill_counts(postings)
-    best_name, best_count = _best_skill(expected_counts)
+    best_name, best_count = _best_current_skill(postings, expected_counts)
 
     assert summary["total_postings"] == len(postings) == 300
     assert summary["company_count"] == len({p["company_slug"] for p in postings}) == 15
     assert summary["distinct_skill_count"] == len(expected_counts) == 52
+    # "Most demanded" describes the current Jan-Oct 2026 window, not all-time
+    # totals, so a skill that is now declining cannot keep the title.
+    current_total = sum(1 for p in postings if p["year"] == 2026)
     assert summary["most_demanded_skill"]["name"] == best_name
     assert summary["most_demanded_skill"]["posting_count"] == best_count
-    assert summary["most_demanded_skill"]["demand_pct"] == round(100 * best_count / 300, 1)
-
-    # Overall growth: Jan-Oct 2026 (all 2026 postings) vs Jan-Oct 2025 only.
-    current_total = sum(1 for p in postings if p["year"] == 2026)
-    previous_total = sum(1 for p in postings if p["year"] == 2025 and p["month"] <= 10)
-    assert summary["yoy_posting_growth_pct"] == round(
-        100 * (current_total - previous_total) / previous_total, 1
+    assert summary["most_demanded_skill"]["demand_pct"] == round(
+        100 * best_count / current_total, 1
     )
+
+    # Headline growth: the latest year (2026) is partial, so the card compares
+    # the latest two COMPLETE calendar years (2025 vs 2024) and reports that
+    # basis instead of a misleading half-finished-year figure.
+    total_2025 = sum(1 for p in postings if p["year"] == 2025)
+    total_2024 = sum(1 for p in postings if p["year"] == 2024)
+    assert summary["yoy_posting_growth_pct"] == round(
+        100 * (total_2025 - total_2024) / total_2024, 1
+    )
+    assert summary["yoy_growth_basis"] == "Full year 2025 vs 2024 (latest complete years)"
 
 
 @pytest.mark.asyncio
@@ -267,8 +294,15 @@ async def test_sort_options_order_trending_and_demand(client, mock_mongo, datase
     trending_body = await _get_market(
         client, mock_mongo, dataset, "mkt.sort.tpo@college.edu", sort="trending", limit=20
     )
-    scores = [skill["trend_score"] for skill in trending_body["trending_skills"]]
-    assert scores == sorted(scores, reverse=True)
+    skills = trending_body["trending_skills"]
+    # Trending ranks by demand-share momentum, not raw volume or trend score,
+    # and declining skills are always ordered last.
+    active = [skill for skill in skills if skill["trend"] != "declining"]
+    declining = [skill for skill in skills if skill["trend"] == "declining"]
+    assert skills[: len(active)] == active
+    momenta = [skill["momentum_pct"] for skill in active]
+    assert all(momentum is not None for momentum in momenta)
+    assert momenta == sorted(momenta, reverse=True)
 
     demand_body = await _get_market(
         client, mock_mongo, dataset, "mkt.sort2.tpo@college.edu", sort="demand", limit=20
@@ -641,6 +675,7 @@ async def test_empty_collection_returns_valid_empty_response(client, mock_mongo)
         "distinct_skill_count": 0,
         "most_demanded_skill": None,
         "yoy_posting_growth_pct": None,
+        "yoy_growth_basis": None,
     }
     assert body["trending_skills"] == []
     assert body["historical_trends"] == []
@@ -834,7 +869,8 @@ async def test_market_analytics_ignore_operational_collections(client, mock_mong
 
     assert body["summary"]["total_postings"] == 300  # the drive is not counted
     expected_counts = _expected_skill_counts(postings)
-    best_name, best_count = _best_skill(expected_counts)
+    best_name, best_count = _best_current_skill(postings, expected_counts)
+    assert body["summary"]["most_demanded_skill"]["name"] == best_name
     assert body["summary"]["most_demanded_skill"]["posting_count"] == best_count
 
     assert await mock_mongo.placement_drives.count_documents({}) == drives_before
@@ -955,6 +991,7 @@ async def test_company_comparison_returns_full_skills_with_entity_denominator(
                 "trend_score",
                 "trend",
                 "yoy_growth_pct",
+                "momentum_pct",
                 "current_period_count",
                 "previous_period_count",
                 "yearly_counts",

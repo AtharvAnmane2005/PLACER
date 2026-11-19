@@ -75,6 +75,10 @@ def _language_spec(language: CodingLanguage) -> _LanguageSpec:
 
 def supported_languages() -> list[str]:
     """Languages that can actually run on this machine right now."""
+    if get_settings().CODE_EXECUTION_BACKEND == "judge":
+        # The judge image ships both runtimes; the backend image does not
+        # need Node installed just to advertise the capability.
+        return [CodingLanguage.PYTHON.value, CodingLanguage.JAVASCRIPT.value]
     available = [CodingLanguage.PYTHON.value]
     if _node_path():
         available.append(CodingLanguage.JAVASCRIPT.value)
@@ -244,6 +248,47 @@ def _run_case(
     return result
 
 
+def _execute_via_judge(
+    language: CodingLanguage,
+    code: str,
+    cases: list[TestCase],
+) -> CodeRunSummary:
+    """Send one submission to the isolated judge service.
+
+    The judge is trusted infrastructure: it receives every test case (hidden
+    ones included) and returns per-case pass/fail with hidden inputs and
+    expected outputs redacted by the shared runner. A judge outage is a
+    server-configuration problem, not a wrong answer, so it is reported with
+    ``status="error"`` and the caller turns that into a 503.
+    """
+    import httpx
+
+    settings = get_settings()
+    url = settings.CODE_EXECUTION_JUDGE_URL.rstrip("/") + "/run"
+    payload = {
+        "language": language.value,
+        "code": code,
+        "test_cases": [case.model_dump(mode="json") for case in cases],
+        "only_visible": False,
+    }
+    try:
+        response = httpx.post(
+            url,
+            json=payload,
+            timeout=settings.CODE_EXECUTION_JUDGE_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        return CodeRunSummary.model_validate(response.json())
+    except Exception as exc:  # noqa: BLE001 - report, never crash grading
+        return CodeRunSummary(
+            passed=0,
+            total=len(cases),
+            all_passed=False,
+            status="error",
+            error=f"Judge service unavailable: {exc}",
+        )
+
+
 def execute_code(
     language: CodingLanguage | str | None,
     code: str,
@@ -303,15 +348,16 @@ def execute_code(
             ),
         )
 
-    try:
-        spec = _language_spec(lang)
-    except CodeExecutionError as exc:
+    if len(cases) > settings.CODE_EXECUTION_MAX_TEST_CASES:
         return CodeRunSummary(
             passed=0,
             total=len(cases),
             all_passed=False,
-            status="unsupported_language",
-            error=str(exc),
+            status="error",
+            error=(
+                f"Too many test cases ({len(cases)}; limit is "
+                f"{settings.CODE_EXECUTION_MAX_TEST_CASES})."
+            ),
         )
 
     if not cases:
@@ -321,6 +367,22 @@ def execute_code(
             all_passed=False,
             status="completed",
             error=None,
+        )
+
+    # Isolated judge: the backend process never spawns student code. The
+    # judge image runs the same runner with CODE_EXECUTION_BACKEND=local.
+    if settings.CODE_EXECUTION_BACKEND == "judge":
+        return _execute_via_judge(lang, code, cases)
+
+    try:
+        spec = _language_spec(lang)
+    except CodeExecutionError as exc:
+        return CodeRunSummary(
+            passed=0,
+            total=len(cases),
+            all_passed=False,
+            status="unsupported_language",
+            error=str(exc),
         )
 
     env = _minimal_env()

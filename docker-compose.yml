@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   mongodb:
     image: mongo:7
@@ -18,6 +16,42 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - default
+
+  judge:
+    build:
+      context: .
+      dockerfile: judge/Dockerfile
+    container_name: placer_judge
+    restart: unless-stopped
+    # Student code runs inside this container. It has no route to the
+    # internet or MongoDB, cannot write outside /tmp, cannot gain privileges,
+    # and is bounded by CPU, memory and process limits.
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 128
+    mem_limit: 256m
+    cpus: 1.0
+    environment:
+      JUDGE_MAX_CONCURRENT_RUNS: "2"
+    networks:
+      - judge_net
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8080/health', timeout=3)"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
 
   backend:
     build:
@@ -31,10 +65,44 @@ services:
       - ./backend/.env
     environment:
       MONGODB_URI: mongodb://mongodb:27017
+      # The backend never spawns student code in Docker; it delegates to the
+      # isolated judge. Local `python -m ...` runs default to "local".
+      CODE_EXECUTION_BACKEND: judge
+      CODE_EXECUTION_JUDGE_URL: http://judge:8080
     depends_on:
       mongodb:
+        condition: service_healthy
+      judge:
         condition: service_healthy
     volumes:
       - ./backend/app:/app/app
       # Uploaded resume files (referenced by local:// URLs in MongoDB).
       - ./backend/storage:/app/storage
+    networks:
+      - default
+      - judge_net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://backend:8000
+    container_name: placer_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://backend:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - default
+
+networks:
+  # Internal-only network shared by the backend and the judge. It has no
+  # gateway, so neither service can reach the internet or the MongoDB
+  # network through it.
+  judge_net:
+    internal: true

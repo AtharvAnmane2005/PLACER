@@ -138,6 +138,12 @@ class Settings(BaseSettings):
     # entirely; the answer endpoint then returns a clear 503 instead of
     # running student code.
     CODE_EXECUTION_ENABLED: bool = True
+    # "local" runs submissions as subprocesses in this process's host (dev).
+    # "judge" sends them to the isolated judge service (docker-compose sets
+    # this). The public interface (execute_code) is identical either way.
+    CODE_EXECUTION_BACKEND: str = "local"             # local | judge
+    CODE_EXECUTION_JUDGE_URL: str = "http://judge:8080"
+    CODE_EXECUTION_JUDGE_TIMEOUT_SECONDS: float = 30.0
     CODE_EXECUTION_TIMEOUT_SECONDS: float = 3.0      # per test case
     CODE_EXECUTION_TOTAL_TIMEOUT_SECONDS: float = 20.0  # per submission
     CODE_EXECUTION_MAX_CODE_BYTES: int = 20000

@@ -72,18 +72,26 @@ export default function AssessmentResultsPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge
                     variant={
-                      answer.is_correct === true
-                        ? "success"
-                        : answer.is_correct === false
-                          ? "destructive"
+                      answer.type === "descriptive"
+                        ? answer.graded_at
+                          ? "success"
                           : "secondary"
+                        : answer.is_correct === true
+                          ? "success"
+                          : answer.is_correct === false
+                            ? "destructive"
+                            : "secondary"
                     }
                   >
-                    {answer.is_correct === true
-                      ? "Correct"
-                      : answer.is_correct === false
-                        ? "Incorrect"
-                        : "Pending review"}
+                    {answer.type === "descriptive"
+                      ? answer.graded_at
+                        ? "Graded"
+                        : "Pending review"
+                      : answer.is_correct === true
+                        ? "Correct"
+                        : answer.is_correct === false
+                          ? "Incorrect"
+                          : "Pending review"}
                   </Badge>
                   <Badge variant="secondary" className="uppercase">
                     {answer.type ?? "unknown"}
@@ -105,6 +113,14 @@ export default function AssessmentResultsPage() {
                     {answer.response || "(no response)"}
                   </pre>
                 </details>
+                {answer.feedback && (
+                  <div className="mt-2 rounded-md border border-border bg-secondary/40 p-2 text-xs">
+                    <p>
+                      <span className="font-medium">Reviewer feedback: </span>
+                      {answer.feedback}
+                    </p>
+                  </div>
+                )}
                 {result.status === "submitted" && (answer.correct_answer || answer.explanation) && (
                   <div className="mt-2 space-y-1 rounded-md border border-border bg-secondary/40 p-2 text-xs">
                     {answer.correct_answer && (

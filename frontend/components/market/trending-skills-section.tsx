@@ -7,6 +7,7 @@ import {
   CartesianGrid,
   Cell,
   LabelList,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -23,6 +24,7 @@ import {
   CHART_AXIS_STYLE,
   CHART_CURSOR_FILL,
   CHART_GRID_STROKE,
+  CHART_PALETTE,
   CHART_TOOLTIP_STYLE,
   assignCategoryColors,
   chartAxisLabel,
@@ -37,14 +39,22 @@ import type {
   TrendingSkill,
 } from "@/types/market-analytics";
 
+/** Percentage-point change, e.g. +8.1 pts (share momentum, not a % change). */
+function formatSignedPoints(value: number | null | undefined): string {
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
+  return `${value > 0 ? "+" : ""}${value.toFixed(1)} pts`;
+}
+
 function ChartTooltip({
   active,
   payload,
   colorByName,
+  showMomentum,
 }: {
   active?: boolean;
   payload?: Array<{ payload: TrendingSkill }>;
   colorByName: Map<string, string>;
+  showMomentum: boolean;
 }) {
   const entry = payload?.[0];
   if (!active || !entry) return null;
@@ -62,6 +72,21 @@ function ChartTooltip({
           label: "Demand share",
           value: formatPercent(skill.demand_pct, 1),
         },
+        ...(showMomentum
+          ? [
+              {
+                label: "Demand-share momentum",
+                value: formatSignedPoints(skill.momentum_pct),
+              },
+              {
+                label: "YoY posting growth",
+                value:
+                  skill.yoy_growth_pct == null
+                    ? "—"
+                    : formatSignedGrowth(skill.yoy_growth_pct),
+              },
+            ]
+          : []),
       ]}
     />
   );
@@ -85,6 +110,21 @@ export function TrendingSkillsSection({
   const periodLabel = meta?.current_period?.label;
   const previousLabel = meta?.previous_period?.label;
   const comparable = meta?.comparison_comparable ?? false;
+  // Momentum is available whenever the backend could compare two windows. It
+  // is the ranking signal, so the chart plots it when present; otherwise the
+  // card falls back to posting volume (single-year datasets).
+  const hasMomentum =
+    (skills?.length ?? 0) > 0 &&
+    (skills ?? []).every((skill) => skill.momentum_pct != null);
+  const chartMetric: "momentum_pct" | "posting_count" = hasMomentum
+    ? "momentum_pct"
+    : "posting_count";
+  const chartLabel = hasMomentum
+    ? "Change in demand share (percentage points)"
+    : "Postings requiring the skill";
+  const chartAriaLabel = hasMomentum
+    ? "Demand-share momentum by trending skill"
+    : "Postings by trending skill";
   const skillColors = skills ? assignCategoryColors(skills.map((skill) => skill.name)) : [];
   const skillColorByName = new Map<string, string>(
     (skills ?? []).map((skill, index) => [skill.name, skillColors[index]!] as const)
@@ -95,8 +135,9 @@ export function TrendingSkillsSection({
       <CardHeader>
         <CardTitle className="text-base">Top trending skills</CardTitle>
         <CardDescription>
-          Skills ranked by posting count{periodLabel ? ` in ${periodLabel}` : ""}. Each bar uses
-          the skill&apos;s stable colour across the analytics views.
+          {hasMomentum
+            ? `Skills ranked by momentum — the change in demand share between ${previousLabel ?? "the previous period"} and ${periodLabel ?? "the current period"}. Declining skills are listed last.`
+            : `Skills ranked by posting count${periodLabel ? ` in ${periodLabel}` : ""}. Each bar uses the skill's stable colour across the analytics views.`}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -110,7 +151,7 @@ export function TrendingSkillsSection({
           />
         ) : (
           <>
-            <div className="overflow-hidden" role="img" aria-label="Postings by trending skill">
+            <div className="overflow-hidden" role="img" aria-label={chartAriaLabel}>
               <ResponsiveContainer width="100%" height={Math.max(220, skills.length * 34 + 40)}>
                 <BarChart
                   data={skills}
@@ -120,9 +161,9 @@ export function TrendingSkillsSection({
                   <CartesianGrid stroke={CHART_GRID_STROKE} strokeDasharray="3 3" horizontal={false} />
                   <XAxis
                     type="number"
-                    allowDecimals={false}
+                    allowDecimals={hasMomentum}
                     tick={CHART_AXIS_STYLE}
-                    label={chartAxisLabel("Postings requiring the skill")}
+                    label={chartAxisLabel(chartLabel)}
                   />
                   <YAxis
                     type="category"
@@ -134,21 +175,40 @@ export function TrendingSkillsSection({
                     }
                   />
                   <Tooltip
-                    content={<ChartTooltip colorByName={skillColorByName} />}
+                    content={
+                      <ChartTooltip
+                        colorByName={skillColorByName}
+                        showMomentum={hasMomentum}
+                      />
+                    }
                     cursor={{ fill: CHART_CURSOR_FILL }}
                     contentStyle={CHART_TOOLTIP_STYLE}
                   />
-                  <Bar dataKey="posting_count" radius={[0, 4, 4, 0]} barSize={16}>
-                    {skills.map((skill) => (
-                      <Cell
-                        key={skill.name}
-                        fill={skillColorByName.get(skill.name)}
-                      />
-                    ))}
+                  {hasMomentum && (
+                    <ReferenceLine x={0} stroke={CHART_GRID_STROKE} strokeWidth={1.5} />
+                  )}
+                  <Bar dataKey={chartMetric} radius={[0, 4, 4, 0]} barSize={16}>
+                    {skills.map((skill) => {
+                      const declining = hasMomentum && (skill.momentum_pct ?? 0) < 0;
+                      return (
+                        <Cell
+                          key={skill.name}
+                          fill={
+                            declining
+                              ? CHART_PALETTE.red
+                              : skillColorByName.get(skill.name)
+                          }
+                        />
+                      );
+                    })}
                     <LabelList
-                      dataKey="posting_count"
+                      dataKey={chartMetric}
                       position="right"
-                      formatter={(value: number | string) => formatCount(Number(value))}
+                      formatter={(value: number | string) =>
+                        hasMomentum
+                          ? formatSignedPoints(Number(value))
+                          : formatCount(Number(value))
+                      }
                       style={{ fill: "#475569", fontSize: 11, fontWeight: 600 }}
                     />
                   </Bar>
@@ -160,7 +220,7 @@ export function TrendingSkillsSection({
                 duplicating the card title visually. Trend badges carry a
                 native tooltip explaining the classification. */}
             <div className="overflow-x-auto">
-              <table className={`w-full ${comparable ? "min-w-[760px]" : "min-w-[560px]"} text-sm`}>
+              <table className={`w-full ${comparable ? "min-w-[840px]" : "min-w-[560px]"} text-sm`}>
                 <caption className="sr-only">Trending skills detail</caption>
                 <thead>
                   <tr className="border-b border-border text-left text-xs uppercase tracking-wide text-muted-foreground">
@@ -175,6 +235,15 @@ export function TrendingSkillsSection({
                     >
                       Current
                     </th>
+                    {hasMomentum && (
+                      <th
+                        scope="col"
+                        className="py-2 pr-3 text-right font-medium"
+                        title="Change in demand share versus the previous comparable period, in percentage points."
+                      >
+                        Momentum
+                      </th>
+                    )}
                     {comparable && (
                       <>
                         <th
@@ -214,6 +283,11 @@ export function TrendingSkillsSection({
                       >
                         {skill.current_period_count}
                       </td>
+                      {hasMomentum && (
+                        <td className="py-2.5 pr-3 text-right tabular-nums">
+                          {formatSignedPoints(skill.momentum_pct)}
+                        </td>
+                      )}
                       {comparable && (
                         <>
                           <td

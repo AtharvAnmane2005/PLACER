@@ -1255,7 +1255,7 @@ $0.10\cdot10+0.20\cdot12+0.30\cdot15+0.40\cdot18=1.0+2.4+4.5+7.2=15.10$.
 
 **Implementation.** `_TREND_WEIGHTS_BY_YEAR_OFFSET = (0.40,0.30,0.20,0.10)` (`:140`), `_trend_score` (`:256-298`).
 
-**Dashboard display.** Default "trending" sort and the trend score in the Trending Skills table.
+**Dashboard display.** The trend score column in the Trending Skills table. The default `sort=trending` order is demand-share momentum (F-6.9), not this score.
 
 **Storage.** Derived.
 
@@ -1310,21 +1310,55 @@ $$
 **Status:** Implemented
 **Expression**
 
+When the latest filtered year is partial (for example, 2026 through November), the headline compares the latest two **complete** calendar years:
+
 $$
-\text{summary\_growth}=\mathrm{round}\!\left(100\cdot\frac{P_{\text{current}}-P_{\text{previous}}}{P_{\text{previous}}},\,1\right)
+\text{summary\_growth}=\mathrm{round}\!\left(100\cdot\frac{P_{\text{latest complete}}-P_{\text{previous complete}}}{P_{\text{previous complete}}},\,1\right)
 $$
 
-**Variables.** $P$ = total postings in the comparable window.
+The response reports that basis in `summary.yoy_growth_basis` (for example, `"Full year 2025 vs 2024 (latest complete years)"`). If no complete pair exists under the current filters, the card falls back to the current comparable window (F-6.3) and labels it accordingly. When the latest year itself is complete, it compares that full year with the previous full year.
 
-**Worked example.** 500 current vs 400 previous $\Rightarrow+25.0\%$.
+**Variables.** $P$ = total postings in the chosen pair of complete calendar years, or in the comparable window for the fallback.
 
-**Why used.** A headline market-volume signal alongside skill-level trends.
+**Worked example.** 2025 = 2,548 and 2024 = 2,490 postings $\Rightarrow+2.3\%$, even though the in-progress Jan–Nov 2026 window is below Jan–Nov 2025.
 
-**Implementation.** `_build_response` (`:631` onward) using the same `_growth_pct`.
+**Why used.** A half-finished year is not a full-year volume figure; comparing it with a full year (or with an in-progress month) manufactures a misleading decline. The basis string makes the comparison explicit instead of hiding it.
+
+**Implementation.** `_headline_growth`, `_build_response`; both use `_growth_pct`.
 
 **Storage.** Derived.
 
-**Edge cases.** `None` when the previous window has no postings.
+**Edge cases.** `None` when the previous comparison period has no postings. A filtered population with no complete year pair falls back to the comparable-window comparison rather than failing.
+
+### F-6.9 — Demand-share momentum and trending order
+
+**Status:** Implemented
+**Expression**
+
+$$
+\text{momentum}(k)=\mathrm{round}\!\left(100\cdot\frac{c_{\text{current}}}{N_{\text{current}}}-100\cdot\frac{c_{\text{previous}}}{N_{\text{previous}}},\,2\right)
+$$
+
+where $c$ is the skill's posting count and $N$ the total postings in the same comparable window. The result is in **percentage points** of demand share, not a percentage change.
+
+`sort=trending` orders by:
+
+1. non-declining skills before `declining` skills;
+2. skills with a momentum value before skills without one;
+3. momentum descending;
+4. then trend score, posting count, and name as deterministic tie-breakers.
+
+**Worked example.** A skill at 20/2,000 (10.0%) last year and 30/2,100 (14.3%) this year has momentum $+4.3$ pts. If total postings fell, its raw count growth could be negative while its share still rose.
+
+**Why used.** Share momentum answers "is demand for this skill growing relative to the market?" and is immune to an overall contraction in posting volume. Ordering declining skills last prevents a high-volume but shrinking skill (for example, React in this dataset) from being presented as the top trending skill.
+
+**Implementation.** `_share_pct`, `_skill_record` (`momentum_pct`), `_build_response` (`trending_key`).
+
+**Dashboard display.** The default Trending Skills chart and the Momentum table column; the tooltip shows both momentum and raw YoY growth.
+
+**Storage.** Derived.
+
+**Edge cases.** `None` when the filtered population is not comparable or the current window has no postings. A skill with zero postings in the previous window receives its full current share as momentum and is classified `emerging`.
 
 ---
 
@@ -2007,7 +2041,8 @@ These names appear in comments, docs or design intent. They are **not** computed
 | F-6.5 | Trend score | same | `_trend_score` | market | Implemented |
 | F-6.6 | Entity share | same | `get_market_comparison` | `/market/comparison` | Implemented |
 | F-6.7 | Tech/soft share | same | `get_market_comparison` | same | Implemented |
-| F-6.8 | Summary YoY | same | `_build_response` | `/analytics/tpo/market` | Implemented |
+| F-6.8 | Summary YoY (complete-year basis) | same | `_headline_growth`, `_build_response` | `/analytics/tpo/market` | Implemented |
+| F-6.9 | Demand-share momentum / trending order | same | `_share_pct`, `_skill_record`, `_build_response` | `/analytics/tpo/market` | Implemented |
 | F-7.1 | Overall accuracy | `student_insights_service.py` | `build` | `/insights/me` | Implemented |
 | F-7.2 | Focus priority | same | `_rank_skills` | `/insights/me` | Implemented |
 | F-7.3 | Severity | same | `_severity` | `/insights/me` | Implemented |

@@ -81,7 +81,8 @@ export default function AdminAssessmentsPage() {
                 {a.category_ids.length} categor{a.category_ids.length === 1 ? "y" : "ies"} · Max{" "}
                 {a.anti_cheat_config.max_violations ?? "—"} violations
                 {a.anti_cheat_config.require_fullscreen && " · Fullscreen required"}
-                {a.format === "standardized" && ` · ${a.total_marks} marks · Passing ${a.passing_marks}`}
+                {a.total_marks > 0 && ` · ${a.total_marks} marks`}
+                {a.format === "standardized" && a.passing_marks > 0 && ` · Passing ${a.passing_marks}`}
               </CardContent>
             </Card>
           ))}

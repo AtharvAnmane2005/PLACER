@@ -14,9 +14,10 @@ Grading: MCQ is exact-match against `correct_answer`, fully automatic.
 Coding questions are executed against one or more stdin/stdout test cases
 (see `code_execution_service`) — a question is correct only when every test
 case passes. Descriptive questions are stored ungraded (`is_correct=None`)
-for manual review — there's no reliable free/automatic way to grade free-text
-answers without an LLM-grading pipeline, which is its own scope decision to
-make deliberately, not bolt on as an afterthought.
+and scored by a TPO/admin reviewer through the manual-review endpoints; there
+is no reliable free/automatic way to grade free-text answers without an
+LLM-grading pipeline, which is its own scope decision to make deliberately,
+not bolt on as an afterthought.
 """
 import asyncio
 import random
@@ -47,7 +48,7 @@ from app.repositories.application_repository import ApplicationRepository
 from app.repositories.assessment_repository import AssessmentRepository
 from app.repositories.attempt_repository import AttemptRepository
 from app.repositories.drive_repository import PlacementDriveRepository
-from app.repositories.profile_repositories import StudentRepository
+from app.repositories.profile_repositories import StudentRepository, TPORepository
 from app.repositories.question_repository import QuestionRepository
 from app.services.code_execution_service import execute_code
 from app.services.knowledge_tracing_service import KnowledgeTracingService
@@ -140,6 +141,26 @@ class AssessmentService:
     def _is_standardized(assessment: AssessmentInDB) -> bool:
         """Only assessments with a stored fixed set use the standardized path."""
         return assessment.format == AssessmentFormat.STANDARDIZED and bool(assessment.question_ids)
+
+    async def compute_adaptive_total_marks(
+        self, category_ids: list[str], question_pool_size: int
+    ) -> int:
+        """Upper bound on the marks an adaptive attempt can earn.
+
+        Adaptive selection asks at most ``question_pool_size`` questions from
+        the assessment's categories, so the best possible score is the sum of
+        the highest-mark questions available. Storing this at creation time
+        means the admin/student views no longer report ``0`` marks until an
+        attempt happens to be graded.
+        """
+        if question_pool_size <= 0:
+            return 0
+        query: dict = {"status": {"$in": ["active", None]}}
+        if category_ids:
+            query["category_id"] = {"$in": category_ids}
+        questions = await self.questions.find_many(query, limit=5000)
+        marks = sorted((int(q.marks) for q in questions), reverse=True)
+        return int(sum(marks[:question_pool_size]))
 
     async def _ordered_questions(self, assessment: AssessmentInDB) -> list[QuestionInDB]:
         """Return the assessment's fixed questions in their stored order."""
@@ -393,26 +414,50 @@ class AssessmentService:
             return attempt
 
         assessment = await self.assessments.get_by_id(updated_attempt.assessment_id)
-        standardized = assessment is not None and self._is_standardized(assessment)
+        total_marks, max_marks, score_pct = self._score_attempt(updated_attempt, assessment)
+        await self._apply_score_to_applications(updated_attempt, assessment, total_marks, score_pct)
 
-        # Calculate score percentage. Standardized assessments use their
-        # configured total marks (and clamp negative-marking results at zero),
-        # while adaptive attempts keep the difficulty-derived maximum.
-        total_marks = sum(a.marks_awarded for a in updated_attempt.answers)
-        max_marks = sum(DIFFICULTY_MARKS[a.difficulty_at_time] for a in updated_attempt.answers)
+        # For practice assessments, we still update knowledge tracing but don't
+        # link to applications (already handled by not setting assessment_attempt_id
+        # for practice assessments in start_attempt)
+
+        return updated_attempt
+
+    def _score_attempt(
+        self, attempt: AssessmentAttemptInDB, assessment: AssessmentInDB | None
+    ) -> tuple[float, int, float]:
+        """Return ``(total_marks, max_marks, score_pct)`` for an attempt.
+
+        Standardized assessments use their configured total marks (and clamp
+        negative-marking results at zero), while adaptive attempts keep the
+        difficulty-derived maximum for the questions actually asked.
+        """
+        standardized = assessment is not None and self._is_standardized(assessment)
+        total_marks = sum(a.marks_awarded for a in attempt.answers)
+        max_marks = sum(DIFFICULTY_MARKS[a.difficulty_at_time] for a in attempt.answers)
         if standardized and assessment is not None:
             max_marks = assessment.total_marks or max_marks
             total_marks = max(0.0, min(float(total_marks), float(max_marks)))
         score_pct = round(100.0 * total_marks / max_marks, 1) if max_marks > 0 else 0.0
+        return total_marks, max_marks, score_pct
 
-        # Check if an application is linked to this attempt. One attempt can in
-        # principle be linked to several applications, so this must not be
-        # capped at the repository default — a missed row here means an
-        # application silently never gets its pass/fail status updated.
+    async def _apply_score_to_applications(
+        self,
+        attempt: AssessmentAttemptInDB,
+        assessment: AssessmentInDB | None,
+        total_marks: float,
+        score_pct: float,
+    ) -> None:
+        """Persist the (possibly re-computed) score on every linked application.
+
+        One attempt can in principle be linked to several applications, so this
+        must not be capped at the repository default — a missed row here means
+        an application silently never gets its pass/fail status updated.
+        """
+        standardized = assessment is not None and self._is_standardized(assessment)
         linked_apps = await self.applications.find_many(
-            {"assessment_attempt_id": updated_attempt.id}, limit=100
+            {"assessment_attempt_id": attempt.id}, limit=100
         )
-
         for app in linked_apps:
             drive = await self.drives.get_by_id(app.drive_id)
             pass_status = AssessmentStatus.PASSED.value
@@ -430,12 +475,6 @@ class AssessmentService:
                     "assessment_status": pass_status,
                 },
             )
-
-        # For practice assessments, we still update knowledge tracing but don't
-        # link to applications (already handled by not setting assessment_attempt_id
-        # for practice assessments in start_attempt)
-
-        return updated_attempt
 
     async def submit_answer(
         self,
@@ -670,3 +709,217 @@ class AssessmentService:
         )
 
         return updated_attempt, violation_count, max_violations, auto_submitted
+
+    # ------------------------------------------------------------------
+    # Manual review of descriptive answers
+    # ------------------------------------------------------------------
+    async def _assert_can_review(
+        self,
+        assessment: AssessmentInDB,
+        reviewer_role: str,
+        reviewer_user_id: str,
+    ) -> None:
+        """Admin may review anything; a TPO only their own drive's attempts.
+
+        Practice assessments have no owning drive, so any TPO may review them —
+        they are placement-team work rather than a specific drive's data.
+        """
+        if reviewer_role == "admin":
+            return
+        if reviewer_role != "tpo":
+            raise AssessmentError("You do not have permission to review attempts.", 403)
+        if assessment.drive_id:
+            drive = await self.drives.get_by_id(assessment.drive_id)
+            tpo = await TPORepository(self.db).get_by_user_id(reviewer_user_id)
+            if not drive or not tpo or str(drive.created_by) != str(tpo.id):
+                raise AssessmentError(
+                    "You do not have permission to review attempts for this drive.", 403
+                )
+
+    async def _review_context(
+        self, attempt_id: str, reviewer_role: str, reviewer_user_id: str
+    ) -> tuple[AssessmentAttemptInDB, AssessmentInDB, object | None]:
+        attempt = await self.attempts.get_by_id(attempt_id)
+        if not attempt:
+            raise AssessmentError("Attempt not found.", 404)
+        assessment = await self.assessments.get_by_id(attempt.assessment_id)
+        if not assessment:
+            raise AssessmentError("Assessment not found.", 404)
+        await self._assert_can_review(assessment, reviewer_role, reviewer_user_id)
+        if attempt.status != AttemptStatus.SUBMITTED:
+            raise AssessmentError("Only submitted attempts can be reviewed.", 400)
+        student = await self.students.get_by_id(attempt.student_id)
+        return attempt, assessment, student
+
+    async def pending_reviews(
+        self, reviewer_role: str, reviewer_user_id: str
+    ) -> list:
+        """Submitted attempts with at least one ungraded descriptive answer."""
+        from app.models.assessment import PendingReviewItem
+
+        attempts = await self.attempts.find_many(
+            {
+                "status": AttemptStatus.SUBMITTED.value,
+                "answers.question_type": QuestionType.DESCRIPTIVE.value,
+            },
+            limit=500,
+            sort=[("submitted_at", -1)],
+        )
+        items = []
+        for attempt in attempts:
+            assessment = await self.assessments.get_by_id(attempt.assessment_id)
+            if not assessment:
+                continue
+            try:
+                await self._assert_can_review(assessment, reviewer_role, reviewer_user_id)
+            except AssessmentError:
+                continue
+            pending = [
+                a
+                for a in attempt.answers
+                if a.question_type == QuestionType.DESCRIPTIVE and a.graded_at is None
+            ]
+            if not pending:
+                continue
+            student = await self.students.get_by_id(attempt.student_id)
+            items.append(
+                PendingReviewItem(
+                    attempt_id=attempt.id,
+                    assessment_id=assessment.id,
+                    assessment_title=assessment.title,
+                    assessment_type=assessment.type,
+                    drive_id=assessment.drive_id,
+                    student_id=attempt.student_id,
+                    student_name=student.name if student else None,
+                    submitted_at=attempt.submitted_at,
+                    pending_count=len(pending),
+                    total_answers=len(attempt.answers),
+                )
+            )
+        return items
+
+    async def get_review(
+        self, attempt_id: str, reviewer_role: str, reviewer_user_id: str
+    ):
+        from app.models.assessment import AttemptReviewAnswer, AttemptReviewResponse
+
+        attempt, assessment, student = await self._review_context(
+            attempt_id, reviewer_role, reviewer_user_id
+        )
+        total_marks, max_possible_marks, _ = self._score_attempt(attempt, assessment)
+        answers = []
+        pending_count = 0
+        for answer in attempt.answers:
+            if answer.question_type != QuestionType.DESCRIPTIVE:
+                continue
+            question = await self.questions.get_by_id(answer.question_id)
+            if answer.graded_at is None:
+                pending_count += 1
+            answers.append(
+                AttemptReviewAnswer(
+                    question_id=answer.question_id,
+                    question_text=question.text if question else "(question no longer available)",
+                    response=answer.response,
+                    max_marks=question.marks
+                    if question
+                    else DIFFICULTY_MARKS[answer.difficulty_at_time],
+                    marks_awarded=answer.marks_awarded,
+                    is_correct=answer.is_correct,
+                    graded_at=answer.graded_at,
+                    feedback=answer.feedback,
+                    skill_tags=list(question.skill_tags) if question else [],
+                )
+            )
+        return AttemptReviewResponse(
+            attempt_id=attempt.id,
+            assessment_id=assessment.id,
+            assessment_title=assessment.title,
+            assessment_type=assessment.type,
+            drive_id=assessment.drive_id,
+            student_id=attempt.student_id,
+            student_name=student.name if student else None,
+            status=attempt.status,
+            submitted_at=attempt.submitted_at,
+            pending_count=pending_count,
+            total_marks=total_marks,
+            max_possible_marks=max_possible_marks,
+            answers=answers,
+        )
+
+    async def grade_descriptive(
+        self,
+        attempt_id: str,
+        reviewer_role: str,
+        reviewer_user_id: str,
+        question_id: str,
+        marks_awarded: float,
+        feedback: str | None = None,
+    ):
+        """Score one descriptive answer and refresh the attempt/application score."""
+        from app.models.assessment import ManualGradeResponse
+
+        attempt, assessment, _ = await self._review_context(
+            attempt_id, reviewer_role, reviewer_user_id
+        )
+        target = next((a for a in attempt.answers if a.question_id == question_id), None)
+        if not target:
+            raise AssessmentError("This question was not answered in this attempt.", 404)
+        if target.question_type != QuestionType.DESCRIPTIVE:
+            raise AssessmentError("Only descriptive answers can be manually graded.", 400)
+
+        question = await self.questions.get_by_id(question_id)
+        max_marks = question.marks if question else DIFFICULTY_MARKS[target.difficulty_at_time]
+        marks = max(0.0, min(float(marks_awarded), float(max_marks)))
+        graded_at = datetime.utcnow()
+        is_correct = marks >= max_marks
+
+        new_answers = []
+        for answer in attempt.answers:
+            data = answer.model_dump(mode="json")
+            if answer.question_id == question_id:
+                data.update(
+                    {
+                        "marks_awarded": marks,
+                        "is_correct": is_correct,
+                        "graded_at": graded_at,
+                        "graded_by": reviewer_user_id,
+                        "feedback": (feedback or "").strip() or None,
+                    }
+                )
+            new_answers.append(data)
+
+        updated = await self.attempts.update_by_id(attempt.id, {"answers": new_answers})
+        if not updated:
+            raise AssessmentError("Attempt not found.", 404)
+
+        total_marks, max_possible_marks, score_pct = self._score_attempt(updated, assessment)
+        await self._apply_score_to_applications(updated, assessment, total_marks, score_pct)
+        pending_count = sum(
+            1
+            for a in updated.answers
+            if a.question_type == QuestionType.DESCRIPTIVE and a.graded_at is None
+        )
+
+        await log_activity(
+            self.db,
+            reviewer_user_id,
+            action="descriptive_answer_graded",
+            entity="assessment_attempt",
+            entity_id=attempt.id,
+            metadata={
+                "question_id": question_id,
+                "marks_awarded": marks,
+                "max_marks": max_marks,
+                "pending_count": pending_count,
+            },
+        )
+
+        return ManualGradeResponse(
+            attempt_id=attempt.id,
+            question_id=question_id,
+            marks_awarded=marks,
+            is_correct=is_correct,
+            pending_count=pending_count,
+            total_marks=total_marks,
+            max_possible_marks=max_possible_marks,
+        )

@@ -45,6 +45,24 @@ Year-over-year growth
     ``previous == 0`` yields ``None`` (handled by the emerging classification),
     never a ZeroDivisionError.
 
+    The SUMMARY card is different on purpose: a half-finished latest year is
+    not a full-year figure, so ``yoy_posting_growth_pct`` compares the latest
+    two COMPLETE calendar years present in the filtered population (and reports
+    that basis in ``yoy_growth_basis``). Only when no complete pair exists does
+    it fall back to the current comparable window.
+
+Trending ranking
+    ``sort="trending"`` ranks by ``momentum_pct`` — the change in the skill's
+    demand SHARE between the current and previous comparable windows, in
+    percentage points. Share momentum is independent of total posting volume,
+    so a shrinking market cannot make every skill look like it is declining.
+    Skills classified ``declining`` are ordered last, never presented as the
+    top trending skills. ``sort="demand"`` keeps the plain posting-count order.
+
+    "Most demanded skill" in the summary is measured over the CURRENT period
+    (not all-time totals), so a skill that has been overtaken or is now
+    declining cannot keep the title on historical volume alone.
+
 Trend score
     Weighted mean of the skill's year-wise DEMAND SHARES (percentages of that
     year's postings, not raw counts)::
@@ -466,6 +484,11 @@ def _aggregate_postings(
 # ---------------------------------------------------------------------------
 
 
+def _share_pct(part: int, whole: int) -> float:
+    """Unrounded demand share, used for differences between periods."""
+    return (100.0 * part / whole) if whole > 0 else 0.0
+
+
 def _skill_record(
     name: str,
     agg: _Aggregate,
@@ -478,6 +501,20 @@ def _skill_record(
     latest_year = agg.latest_year or 0
     current = _window_count(full, windowed, latest_year, use_window)
     previous = _window_count(full, windowed, latest_year - 1, use_window)
+    # Share momentum is the honest "trending" signal: it compares how much of
+    # the market asked for the skill in the current window vs the previous
+    # comparable one, independent of the total posting volume. A skill whose
+    # raw count fell can still be gaining share (and vice versa).
+    momentum: float | None = None
+    if agg.comparable and agg.current_total > 0:
+        if previous == 0:
+            momentum = round(_share_pct(current, agg.current_total), 2)
+        elif agg.previous_total > 0:
+            momentum = round(
+                _share_pct(current, agg.current_total)
+                - _share_pct(previous, agg.previous_total),
+                2,
+            )
     return {
         "name": name,
         "slug": slug,
@@ -496,6 +533,7 @@ def _skill_record(
         ),
         "trend": _classify_trend(current, previous, agg.comparable),
         "yoy_growth_pct": _growth_pct(current, previous),
+        "momentum_pct": momentum,
         "current_period_count": current,
         "previous_period_count": previous,
         "yearly_counts": {year: full.get(year, 0) for year in agg.years},
@@ -524,6 +562,7 @@ def _trending_skill_from_record(record: dict[str, Any]) -> TrendingSkill:
         trend_score=record["trend_score"],
         trend=record["trend"],
         yoy_growth_pct=record["yoy_growth_pct"],
+        momentum_pct=record["momentum_pct"],
         current_period_count=record["current_period_count"],
         previous_period_count=record["previous_period_count"],
         yearly_counts=record["yearly_counts"],
@@ -637,6 +676,49 @@ def _top_skills(
     return top
 
 
+def _headline_growth(agg: _Aggregate) -> tuple[int, int, str | None]:
+    """Counts and label for the summary card's YoY posting growth.
+
+    The latest year in this dataset is usually still in progress. Comparing a
+    partial year with the same months of the previous year still includes an
+    in-progress month, and the total posting volume of a live archive is not a
+    like-for-like full-year figure. The headline therefore uses the latest two
+    COMPLETE calendar years present in the filtered population whenever the
+    latest year is partial; only when no complete pair exists does it fall back
+    to the current comparable window.
+    """
+    latest = agg.latest_year
+    if latest is None:
+        return 0, 0, None
+
+    if agg.current_window[1] == 12:
+        # Latest year is complete: a normal full-year YoY comparison.
+        return (
+            agg.yearly_totals.get(latest, 0),
+            agg.yearly_totals.get(latest - 1, 0),
+            f"Full year {latest} vs {latest - 1}",
+        )
+
+    for year in sorted((y for y in agg.years if y < latest), reverse=True):
+        if (year - 1) not in agg.yearly_totals:
+            continue
+        if _historical_end_month(agg.coverage, year) < 12:
+            continue
+        if _historical_end_month(agg.coverage, year - 1) < 12:
+            continue
+        return (
+            agg.yearly_totals[year],
+            agg.yearly_totals[year - 1],
+            f"Full year {year} vs {year - 1} (latest complete years)",
+        )
+
+    # No complete pair under these filters: be explicit that the fallback is
+    # the current comparable window, not a full year.
+    current_label = _period_info(latest, agg.current_window).label
+    previous_label = _period_info(latest - 1, agg.current_window).label
+    return agg.current_total, agg.previous_total, f"{current_label} vs {previous_label}"
+
+
 def _build_response(
     agg: _Aggregate,
     catalog_by_name: dict[str, Any],
@@ -655,11 +737,25 @@ def _build_response(
         ordered = sorted(
             records.values(), key=lambda r: (-r["posting_count"], r["name"])
         )
-    else:  # "trending" — highest weighted demand-share score first
-        ordered = sorted(
-            records.values(),
-            key=lambda r: (-r["trend_score"], -r["posting_count"], r["name"]),
-        )
+    else:  # "trending" — strongest demand-share momentum first
+        # Declining skills are never presented as the top trending skills: they
+        # are ordered last even when their absolute posting volume is high.
+        # Momentum (percentage-point change in demand share) is used instead of
+        # raw-count growth so a falling overall market cannot make every skill
+        # look like it is shrinking.
+        def trending_key(r: dict[str, Any]) -> tuple[Any, ...]:
+            declining = 1 if r["trend"] == "declining" else 0
+            momentum = r["momentum_pct"]
+            return (
+                declining,
+                0 if momentum is not None else 1,
+                -(momentum if momentum is not None else 0.0),
+                -r["trend_score"],
+                -r["posting_count"],
+                r["name"],
+            )
+
+        ordered = sorted(records.values(), key=trending_key)
     trending = [_trending_skill_from_record(r) for r in ordered[: query.limit]]
 
     # --- Historical trends (every in-scope skill, all filtered years) ------
@@ -718,22 +814,45 @@ def _build_response(
     ]
 
     # --- Summary -----------------------------------------------------------
+    # "Most demanded" describes the CURRENT period, not the all-time archive.
+    # Using all-time totals let a skill that is now declining keep the title
+    # long after another skill had overtaken it in the current window.
     most_demanded = None
     if records:
-        best = min(records.values(), key=lambda r: (-r["posting_count"], r["name"]))
+        use_current = agg.comparable and agg.current_total > 0
+        if use_current:
+            best = min(
+                records.values(),
+                key=lambda r: (
+                    -r["current_period_count"],
+                    -r["posting_count"],
+                    r["name"],
+                ),
+            )
+            demanded_count = best["current_period_count"]
+            demanded_total = agg.current_total
+        else:
+            best = min(
+                records.values(), key=lambda r: (-r["posting_count"], r["name"])
+            )
+            demanded_count = best["posting_count"]
+            demanded_total = agg.total_postings
         most_demanded = MarketSkillDemand(
             name=best["name"],
             slug=best["slug"],
             category=best["category"],
-            posting_count=best["posting_count"],
-            demand_pct=best["demand_pct"],
+            posting_count=demanded_count,
+            demand_pct=_pct(demanded_count, demanded_total),
         )
+
+    growth_current, growth_previous, growth_basis = _headline_growth(agg)
     summary = MarketSummary(
         total_postings=agg.total_postings,
         company_count=len(agg.companies),
         distinct_skill_count=len(records),
         most_demanded_skill=most_demanded,
-        yoy_posting_growth_pct=_growth_pct(agg.current_total, agg.previous_total),
+        yoy_posting_growth_pct=_growth_pct(growth_current, growth_previous),
+        yoy_growth_basis=growth_basis if growth_previous > 0 else None,
     )
 
     # --- Company analytics -------------------------------------------------

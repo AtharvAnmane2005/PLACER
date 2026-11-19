@@ -75,6 +75,12 @@ PLACEMENT_SECTIONS: tuple[str, ...] = (
 )
 PLACEMENT_SECTION_SIZE = 4
 PLACEMENT_TOTAL_QUESTIONS = 20
+# Preferred number of coding questions in the Programming section of a
+# standardized drive assessment. The selector fills the hardest planned slots
+# first and falls back to an objective question when the bank has no coding
+# question for a slot, so generation never fails just because a bank has no
+# coding content.
+PLACEMENT_CODING_QUESTIONS = 1
 PLACEMENT_DIFFICULTY_QUOTA = {
     DifficultyLevel.EASY: 6,
     DifficultyLevel.MEDIUM: 10,
@@ -188,6 +194,11 @@ class AnsweredQuestion(BaseModel):
     question_type: QuestionType | None = None  # stored for results, old records may omit it
     # Detailed per-test outcome for coding questions (None for other types).
     code_result: dict | None = None
+    # --- Manual grading (descriptive questions only). ``graded_at`` stays
+    # None until a TPO/admin reviewer scores the answer.
+    graded_at: datetime | None = None
+    graded_by: str | None = None
+    feedback: str | None = None
 
 
 class AssessmentAttemptInDB(MongoBaseModel):
@@ -457,6 +468,10 @@ class AttemptAnswerDetail(BaseModel):
     correct_answer: str | None = None
     explanation: str | None = None
     section: str | None = None
+    # Manual grading (descriptive answers). ``graded_at`` is None while the
+    # answer is still awaiting review.
+    graded_at: datetime | None = None
+    feedback: str | None = None
 
 
 class AttemptResultResponse(BaseModel):
@@ -477,6 +492,66 @@ class AttemptQuestionsResponse(BaseModel):
     questions: list[QuestionStudentView] = Field(default_factory=list)
     answered_question_ids: list[str] = Field(default_factory=list)
     instructions: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Manual review of descriptive answers (TPO/admin)
+# ---------------------------------------------------------------------------
+class PendingReviewItem(BaseModel):
+    attempt_id: str
+    assessment_id: str
+    assessment_title: str
+    assessment_type: AssessmentType
+    drive_id: str | None = None
+    student_id: str
+    student_name: str | None = None
+    submitted_at: datetime | None = None
+    pending_count: int
+    total_answers: int
+
+
+class AttemptReviewAnswer(BaseModel):
+    question_id: str
+    question_text: str
+    response: str
+    max_marks: int
+    marks_awarded: float
+    is_correct: bool | None
+    graded_at: datetime | None = None
+    feedback: str | None = None
+    skill_tags: list[str] = Field(default_factory=list)
+
+
+class AttemptReviewResponse(BaseModel):
+    attempt_id: str
+    assessment_id: str
+    assessment_title: str
+    assessment_type: AssessmentType
+    drive_id: str | None = None
+    student_id: str
+    student_name: str | None = None
+    status: AttemptStatus
+    submitted_at: datetime | None = None
+    pending_count: int
+    total_marks: float
+    max_possible_marks: int
+    answers: list[AttemptReviewAnswer] = Field(default_factory=list)
+
+
+class ManualGradeRequest(BaseModel):
+    question_id: str
+    marks_awarded: float = Field(ge=0)
+    feedback: str | None = None
+
+
+class ManualGradeResponse(BaseModel):
+    attempt_id: str
+    question_id: str
+    marks_awarded: float
+    is_correct: bool
+    pending_count: int
+    total_marks: float
+    max_possible_marks: int
 
 
 class KnowledgeStateResponse(BaseModel):

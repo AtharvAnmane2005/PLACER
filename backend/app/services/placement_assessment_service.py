@@ -18,6 +18,7 @@ from app.models.assessment import (
     PLACEMENT_SECTION_SIZE,
     PLACEMENT_SECTIONS,
     PLACEMENT_TOTAL_QUESTIONS,
+    PLACEMENT_CODING_QUESTIONS,
     OBJECTIVE_QUESTION_TYPES,
     AssessmentFormat,
     AssessmentInDB,
@@ -156,6 +157,11 @@ class PlacementAssessmentService:
                         "questions": PLACEMENT_SECTION_SIZE,
                         "category_ids": resolved,
                         "skill_tags": section.skill_tags,
+                        "coding_questions": (
+                            PLACEMENT_CODING_QUESTIONS
+                            if section.name == "Programming / Problem Solving"
+                            else 0
+                        ),
                     }
                 )
             return sections
@@ -173,11 +179,16 @@ class PlacementAssessmentService:
                     "questions": PLACEMENT_SECTION_SIZE,
                     "category_ids": resolved,
                     "skill_tags": [],
+                    "coding_questions": (
+                        PLACEMENT_CODING_QUESTIONS
+                        if name == "Programming / Problem Solving"
+                        else 0
+                    ),
                 }
             )
         return sections
 
-    async def _select(self, request: PlacementGenerationRequest, template: object | None = None):
+    async def _select(self, request: PlacementGenerationRequest, template: object | None = None, seed: int | None = None):
         sections = await self._resolve_sections(request)
         structural_deficits = []
         for section in sections:
@@ -201,6 +212,7 @@ class PlacementAssessmentService:
             question_types=list(template.question_types) if template else list(OBJECTIVE_QUESTION_TYPES),
             topics=list(template.topics) if template else [],
             skills=list(template.skills) if template else [],
+            seed=seed,
         )
         return sections, result, result.deficits
 
@@ -226,13 +238,17 @@ class PlacementAssessmentService:
         )
 
     async def generate(
-        self, request: PlacementGenerationRequest, admin_user_id: str, ip_address: str | None = None
+        self,
+        request: PlacementGenerationRequest,
+        admin_user_id: str,
+        ip_address: str | None = None,
+        seed: int | None = None,
     ) -> PlacementGenerationResponse:
         drive = await self.drives.get_by_id(request.drive_id)
         if not drive:
             raise PlacementGenerationError("Placement drive not found.", 404)
         request, template = await self._resolve_request(request)
-        sections, result, deficits = await self._select(request, template)
+        sections, result, deficits = await self._select(request, template, seed=seed)
         if deficits or result is None:
             raise PlacementGenerationError(
                 "Cannot generate a standardized assessment: " + " ".join(deficits),

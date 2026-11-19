@@ -324,6 +324,10 @@ class MarketSummary(BaseModel):
     distinct_skill_count: int = Field(ge=0)
     most_demanded_skill: MarketSkillDemand | None = None
     yoy_posting_growth_pct: float | None = None
+    # Exact basis of ``yoy_posting_growth_pct``. When the latest year is still
+    # partial the headline compares the latest two COMPLETE calendar years, so
+    # a half-finished year is never presented as a year-over-year decline.
+    yoy_growth_basis: str | None = None
 
 
 class TrendingSkill(BaseModel):
@@ -336,6 +340,11 @@ class TrendingSkill(BaseModel):
     trend_score: float
     trend: TrendClassification | None = None
     yoy_growth_pct: float | None = None
+    # Change in demand SHARE between the current and previous comparable
+    # windows, in percentage points. Unlike raw-count growth this is not
+    # distorted by the overall posting volume, so it is the ranking signal for
+    # "trending" (a skill can grow its share while total postings fall).
+    momentum_pct: float | None = None
     current_period_count: int = Field(ge=0)
     previous_period_count: int = Field(ge=0)
     yearly_counts: dict[int, int]

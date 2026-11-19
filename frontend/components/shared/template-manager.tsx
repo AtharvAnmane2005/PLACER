@@ -205,7 +205,12 @@ export function TemplateManagerDialog({
       return;
     }
     if (config.sections.length === 0) {
-      toast({ title: "Add at least one section", variant: "destructive" });
+      toast({
+        title: "Add at least one section",
+        description:
+          "A template must contain at least one section. The Custom preset starts empty on purpose — add a section, then save.",
+        variant: "destructive",
+      });
       return;
     }
     const invalidSection = config.sections.find(
@@ -379,6 +384,13 @@ export function TemplateManagerDialog({
                     ))}
                   </SelectContent>
                 </Select>
+                {presetKey === "custom" && (
+                  <p className="rounded-md border border-dashed border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
+                    The Custom preset is a blank starting point, not a saved template. Add at
+                    least one section with a name and question count before saving — empty
+                    templates are not stored.
+                  </p>
+                )}
               </div>
             )}
 
