@@ -1,146 +1,311 @@
 # PLACER — Project Handoff Summary
-*Generated to continue this build in a new conversation without losing context.*
 
----
+**Purpose of this document:** let a new maintainer continue the project without
+re-deriving decisions. It reflects the **current implemented codebase**, not the
+original phase plan.
 
-## 0. How to use this document
-
-Paste this whole file as your first message in a new chat, along with the latest project zip (`placer_phase11.zip` as of this writing). That gives Claude everything needed to keep building without re-deriving decisions already made.
-
----
-
-## 1. What this project is
-
-**AI-Powered Intelligent Campus Recruitment & Placement Assistance System** ("PLACER") — a final-year engineering project. Full-stack platform for Students, TPOs (Training & Placement Officers), and Admins, covering resume evaluation, semantic job matching, adaptive skill assessment, and placement analytics. Must run entirely on free-tier infrastructure (Vercel, Render, MongoDB Atlas free tier, no paid APIs).
-
-**Tech stack:** FastAPI (Python) backend, Next.js 15 + React 19 + TypeScript + Tailwind + ShadCN frontend, MongoDB (Motor async driver), JWT auth with rotating refresh tokens.
-
-**Location on disk:** `D:\Student Eval Sys\placer\` (Windows machine). `backend/` and `frontend/` are siblings under `placer/`.
-
----
-
-## 2. Critical context: the PLACER ML model
-
-The user has a **pre-trained resume-scoring/matching model** from a Jupyter notebook (`PLACER_RoBERTa_Training_NEW.ipynb`, already analyzed by Claude). It is a **two-stage retrieve-and-rerank semantic matcher**:
-
-1. **Bi-encoder** (`all-MiniLM-L6-v2`, fine-tuned with `MultipleNegativesRankingLoss`) — fast retrieval via cosine similarity
-2. **Cross-encoder** (`cross-encoder/stsb-roberta-base`, fine-tuned) — precise pairwise reranking
-3. **Platt calibration** (`LogisticRegression`) — raw score → true match probability
-4. **Hybrid formula**: `0.50 × calibrated_semantic + 0.35 × skill_coverage + 0.15 × experience_fit`, with explainability (matched/missing skills)
-
-**Architectural decision already made:** this model becomes the engine for Module 5 (Semantic Job Matching) and Module 6 (Explainable AI) almost as-is. It does NOT do resume "quality" grading (grammar/formatting/ATS) — that's handled separately by Phase 6's rule-based parser.
-
-**BLOCKER:** The actual trained model artifacts (bi-encoder weights, cross-encoder weights, fitted calibrator `.pkl`) are with a colleague of the user, not yet received. **Phase 7 (wrapping this model in an inference API) and Phase 9 (Semantic Matching, which depends on Phase 7) are both blocked** until those files arrive. When they do: the user needs to provide the saved model folders (sentence-transformers format for both encoders, plus the calibrator pickle) so Claude can build `app/ml/matching/inference.py` around the *exact* trained weights, per the original requirement to preserve prediction logic exactly.
-
-**To unblock:** ask the user if the artifacts have arrived yet. If yes, request the files be uploaded, then resume Phase 7.
-
----
-
-## 3. Development approach established
-
-- **Strictly phased, incremental delivery.** Each phase: implement → py_compile syntax-check (no network access in Claude's sandbox to actually pip install/run) → user installs/runs on their real Windows machine → user reports pytest results back → fix any real bugs found → move on.
-- **No placeholders, but honest about scope boundaries.** Where something is genuinely out of scope (e.g., real code execution for grading coding questions, real BKT knowledge tracing, webcam proctoring), it's explicitly flagged in `PROJECT_PROGRESS.md` as a documented decision, not silently faked or left as a TODO.
-- **Out-of-order execution when blocked.** Phases 7 and 9 are skipped for now (blocked on external files); Phases 8, 10, 11 were built out of order since they don't depend on the ML model. Phase tracker in `PROJECT_PROGRESS.md` reflects this honestly (marked ⏸ Blocked, not ⬜ Not Started).
-- **Every phase's completion includes:** files created, key architectural decisions (with reasoning), setup/install commands, test instructions, a verification checklist, and "notes carried forward" (known limitations, follow-ups).
-- **Full project re-zipped and delivered after every phase** (old zip deleted, new one includes everything cumulative). `PROJECT_PROGRESS.md` at the repo root is the living source of truth — **read it in full before continuing**, it has far more detail than this summary.
-
----
-
-## 4. Phase status
-
-| Phase | Status |
+| Field | Value |
 |---|---|
-| 1. Architecture, DB schema, API design | ✅ Done |
-| 2. Backend setup (FastAPI, Docker, health check) | ✅ Done |
-| 3. Frontend setup (Next.js scaffold, routing, login UI) | ✅ Done |
-| 4. Authentication (JWT, refresh rotation, RBAC, **Google Sign-In**) | ✅ Done |
-| 5. Resume module (upload, validation, versioning, storage) | ✅ Done |
-| 6. Resume parsing (PyMuPDF/pdfplumber/spaCy) | ✅ Done |
-| **7. Resume scoring integration (PLACER model)** | **⏸ BLOCKED — waiting on trained model artifacts** |
-| 8. Placement drives (CRUD, eligibility, applications) | ✅ Done |
-| **9. Semantic matching** | **⏸ BLOCKED — depends on Phase 7** |
-| 10. Knowledge Tracing System (adaptive assessments) | ✅ Done |
-| 11. Anti-cheat system (backend enforcement) | ✅ Done |
-| 12. Student dashboard | ⬜ Not started |
-| 13. TPO dashboard | ⬜ Not started |
-| 14. Admin dashboard | ⬜ Not started |
-| 15. Analytics | ⬜ Not started |
-| 16. Testing (full pass) | ⬜ Not started (though every phase has been tested incrementally) |
-| 17. Deployment | ⬜ Not started |
-
-**Current test count: 82 passing** (`pytest -v` in `backend/`, with `.venv` activated).
+| Project | PLACER — AI-Powered Campus Recruitment & Placement Assistance System |
+| Repository root | `PLACER/` |
+| Stack | FastAPI + MongoDB backend; Next.js 15 + React 19 frontend |
+| Status | All feature phases implemented; Phase 17 deployment documented but not provisioned; 331 backend tests collected |
+| Canonical quickstart | [`README.md`](./README.md) |
+| End-to-end behaviour | [`docs/SYSTEM_FLOW.md`](./docs/SYSTEM_FLOW.md) |
+| Detailed design | [`docs/PLACER_SYSTEM_DESIGN_AND_DATA_FLOW.md`](./docs/PLACER_SYSTEM_DESIGN_AND_DATA_FLOW.md) |
+| Formulas | [`docs/PLACER_MATHEMATICAL_FORMULAS_AND_ALGORITHMS.md`](./docs/PLACER_MATHEMATICAL_FORMULAS_AND_ALGORITHMS.md) |
+| Seed dataset | [`docs/SEED_DATA.md`](./docs/SEED_DATA.md) |
+| Local logins | [`credentials.md`](./credentials.md) (git-ignored) |
 
 ---
 
-## 5. Key architectural decisions to remember
+## 1. What the system is
 
-1. **Student profile ID vs. User account ID are DIFFERENT IDs.** Every collection that references "which student" (`Resumes.student_id`, `Applications.student_id`, `AssessmentAttempts.student_id`, `KnowledgeStates.student_id`) stores the **Student profile document's own `_id`** (from the `students` collection), resolved via `StudentRepository.get_by_user_id(user_id)` — **never** the raw User account `_id` from the JWT. This was violated once during Phase 10 development and caught/fixed before shipping. **If extending this schema, always resolve through `get_by_user_id()` first.**
-2. **Never concatenate pydantic model instances with raw dicts and write straight to Mongo.** Pymongo can't BSON-encode pydantic objects. When appending to a list field that was fetched (and thus contains model instances), convert with `.model_dump(mode="json")` first. Caught once in Phase 10 (`AssessmentAttempt.answers`), fixed. Fields typed as plain `list[dict]` (like `violations`, `history`) don't have this issue since they never get converted to model instances on read.
-3. **Repository Pattern throughout** — `app/repositories/base.py`'s `BaseRepository[ModelT]` generic class gives every collection consistent CRUD; services never touch Motor/PyMongo directly.
-4. **Auth:** access JWT (15min) in memory only on frontend (never localStorage), httpOnly refresh cookie (7d) that **rotates on every use** (old token revoked, new one issued — replay of an old token fails). Google Sign-In uses client-side ID-token verification (no client secret needed), creates accounts with `password_hash: null`.
-5. **Storage:** local disk (dev) or Cloudinary (prod), selected via `STORAGE_BACKEND` env var, abstracted in `app/services/storage_service.py`. Local storage uses `local://` pseudo-URLs, never absolute filesystem paths, in the DB.
-6. **Resume parsing:** PyMuPDF primary/pdfplumber fallback for text; regex for contact info; spaCy NER with heuristic fallback for name (spaCy model is optional at runtime — app doesn't crash if `en_core_web_sm` isn't downloaded, just logs a warning and degrades gracefully).
-7. **Knowledge tracing:** deliberately a simple exponential-moving-average heuristic, NOT real Bayesian Knowledge Tracing — documented as a conscious choice (BKT needs calibrated params from real usage data that doesn't exist yet for a brand-new system).
-8. **Adaptive assessment:** starts at Medium difficulty, correct → harder, wrong → easier, clamped at Easy/Hard, with graceful fallback to other difficulties if the ideal tier's question pool is exhausted.
-9. **Grading:** MCQ fully automatic (exact-match). Coding is exact-output-match, NOT real code execution (sandboxed execution deliberately out of scope — security-sensitive, substantial feature). Descriptive is stored ungraded for manual review (no review UI built yet).
-10. **Anti-cheat (backend only so far):** generic violation-type strings (not a hardcoded enum) reported to `POST /assessments/attempts/{id}/violation`, auto-submit at a configurable threshold; session-token binding as defense-in-depth beyond JWT; server-side timer enforcement; MCQ options shuffled per-delivery (safe because grading matches option text, not position); IP captured server-side; fingerprint captured once at start (not continuously re-validated, to avoid false positives from legitimate network changes).
-11. **Question sourcing:** user explicitly declined web scraping (copyright/ToS risk was flagged and they agreed) and declined Open Trivia DB integration — **staying with manual bulk JSON import** (`POST /questions/import`), already built. No further work needed here.
-12. **Question types:** MCQ, Coding, Descriptive confirmed sufficient by user — no true/false, fill-in-blank, or keyword-auto-grading needed.
+PLACER supports campus placement end to end for three roles:
 
----
+- **Students** build a profile, upload and parse a resume, browse eligible
+  drives, see match scores, apply, take assessments, and read AI coaching.
+- **TPOs** create and publish drives, attach a standardized assessment, screen
+  applicants, shortlist/reject, and monitor analytics, market demand, and skill
+  gaps.
+- **Admins** own the question bank, assessment templates and placement-paper
+  generation, platform analytics, the cross-drive applications workspace, RAG
+  knowledge ingest, and LLM observability.
 
-## 6. Known environment quirks (Windows-specific, already solved)
-
-- User's Python is the **Windows Store version**, which has venv/PATH quirks. Bare `python`/`pytest` commands sometimes resolve to the wrong install. **Solution in use:** always invoke via the venv's explicit path: `.venv\Scripts\python.exe -m pytest -v`, `.venv\Scripts\python.exe -m pip install -r requirements.txt`.
-- **Docker Desktop's WSL2 virtual disk defaults to C: drive** and can silently eat disk space (holds all Docker images/data, not just this project's). User has limited C: space. Two fixes applied: (a) `docker-compose.yml` now bind-mounts MongoDB data to a project-local `mongodb-data/` folder on D: instead of an opaque Docker volume; (b) user was advised to move Docker Desktop's entire disk image location to D: via Settings → Resources → Advanced (this is the more complete fix, affects all Docker data including future ML library images in Phase 7).
-- **npm peer-dependency conflicts** are common with this Next.js 15 + React 19 combo (the React 19 ecosystem is still catching up on peer-dep metadata in many packages, e.g., `recharts`). **Standing fix:** `frontend/.npmrc` sets `legacy-peer-deps=true` so `npm install` doesn't need the flag manually every time.
-- **Google OAuth clock-skew errors** ("Token used too early") are a Windows clock sync issue, not a code bug — fixed via `w32tm /resync /force` (admin PowerShell).
-- No network access in Claude's own sandbox — all backend code is verified via `py_compile` (syntax only) and manual reasoning, never actually run with real dependencies installed. **The user's `pytest -v` run on their real machine is the actual verification step** every phase.
+There are exactly three roles (`student`, `tpo`, `admin`). Admin accounts are
+created only with `backend/scripts/create_admin.py`; there is no public admin
+registration route.
 
 ---
 
-## 7. Environment setup (for a fresh continuation)
+## 2. Current architecture
+
+```text
+Browser (Next.js :3000)
+  └─ /api/backend/*  →  rewrite  →  FastAPI :8000 /api/v1/*
+                                     ├─ routers/        HTTP, auth guards, validation
+                                     ├─ services/       business logic, orchestration
+                                     ├─ repositories/   one class per collection
+                                     ├─ ml/             parsing/OCR, matching, LLM, RAG
+                                     └─ core/           config, DB, security, deps, limiter
+                                     ▼
+                                  MongoDB 7 :27017 / placer_db
+                                     ▲
+Optional external providers: LLM chat + embeddings, Google Identity, Cloudinary
+Optional judge container: internal judge_net, no published port
+```
+
+Key request path: axios wrapper → Next.js same-origin rewrite →
+`RequestIdMiddleware` → CORS → `get_current_user` / `require_role(...)` → router
+→ service → repository → MongoDB. A `401` triggers one refresh-and-retry.
+
+**Layering rules**
+- Routers stay thin; business logic lives in `app/services/`.
+- One repository per collection; services do not query Motor directly.
+- LLMs narrate already-computed values and never invent scores.
+- AI failures fail soft: deterministic fallbacks or a clear `503`.
+
+---
+
+## 3. Implemented feature inventory
+
+### Auth and identity
+- Student/TPO registration, login, refresh rotation, logout, forgot/reset
+  password, Google Sign-In, `/auth/me`.
+- JWT access token in memory (15 min), rotating httpOnly refresh cookie (7 days),
+  RBAC at the dependency layer.
+- Separate `users` auth identity and `students` / `tpos` / `admins` profiles.
+  Operational records use the **profile** `_id`, not `users._id`.
+
+### Resume and profile
+- PDF upload with size cap, `%PDF` check, SHA-256 dedupe, versioning, one active
+  resume per student.
+- Synchronous parse: PyMuPDF → pdfplumber → PaddleOCR → regex sections → spaCy →
+  LLM skill extraction with regex fallback.
+- Parsed preview, download, reparse, autofill suggestion and apply.
+- Shared 135-skill / 235-alias taxonomy.
+
+### Matching and AI
+- Fine-tuned bi-encoder retrieval → cross-encoder reranking → Platt calibration.
+- Hybrid score: `0.40·semantic + 0.30·skills + 0.20·experience + 0.10·assessment`.
+  Assessment term is `1.0` when no assessment is required or not yet scored.
+- Cached resume/JD embeddings; drive edits invalidate the JD embedding.
+- Grounded LLM/RAG narratives for application explanation, JD match explanation,
+  student insights, and attempt gap analysis.
+- MongoDB cosine knowledge store; LLM/embedding metrics at
+  `GET /admin/observability/llm`.
+
+### Drives, applications, screening
+- Drive CRUD, clone, open/close, JD, required skills, eligibility (CGPA,
+  department, batch), deadline, linked standardized assessment.
+- Opening a drive requires a required assessment; removing it from an open drive
+  is blocked (`ASSESSMENT_REQUIRED_FOR_PUBLISH`).
+- Apply with eligibility gate; unique `(drive_id, student_id)`.
+- Screening recomputes match scores, reconciles assessment pass/fail, and never
+  changes shortlist/reject automatically.
+- Recommended shortlist, bulk status updates, CSV export.
+- Canonical statuses: `applied`, `shortlisted`, `rejected`; legacy `selected`
+  is mapped to `shortlisted` at read time.
+
+### Assessments and grading
+- Adaptive practice papers and standardized drive papers.
+- Standardized papers: 5 sections, 20 questions, 6/10/4 difficulty quota,
+  1/3/5 marks, 30-minute timer in seeded drives, 56 marks, pass 28.
+- Templates and presets, placement generation/revision/participation.
+- Attempt lifecycle: start → one-question-at-a-time answers → finish → results.
+- Grading: MCQ exact match, multiple-select all-or-nothing, coding all tests
+  pass, descriptive manual/API-only.
+- Negative marking only on standardized assessments, only for wrong
+  auto-gradable answers.
+- Knowledge tracing uses an EMA heuristic, not full BKT.
+- Anti-cheat: session token, server timer, auto-submit, randomized options,
+  violation logging, configurable threshold.
+- Coding execution: Python/JS subprocess runner, local or isolated judge.
+
+### Analytics and insight
+- Student dashboard, applications, results, mastery, insights; per-attempt gap
+  analysis is API-only.
+- TPO analytics: applications, drive funnels, departments, companies,
+  participation, assessment ranking, skill gaps.
+- Market Insights: 7,469 postings, demand, momentum, filters, comparison,
+  import-run provenance.
+- Admin analytics and activity summary, cross-drive applications workspace.
+
+### Question bank and admin
+- 500 seeded questions across 13 categories: 420 MCQ, 60 coding, 20
+  descriptive; 150 easy / 225 medium / 125 hard.
+- CRUD, categories, stats, Excel/CSV preview + commit, error report, exports.
+- Coding questions store visible and hidden tests; hidden tests and reference
+  solutions never reach the browser.
+- Assessment templates and standardized generation.
+
+---
+
+## 4. Data model essentials
+
+24 collections in `placer_db`. The important relationships:
+
+```text
+users 1──1 students | tpos | admins          (by user_id)
+students 1──* resumes                         (by student profile _id)
+students 1──* applications                    (by student profile _id)
+placement_drives 1──* applications             (by drive_id)
+placement_drives *──1 companies                (by company_id)
+assessments 1──* assessment_attempts           (by assessment_id)
+students 1──* knowledge_states                 (by student_id, skill_tag)
+```
+
+Collections: `users`, `refresh_tokens`, `password_reset_tokens`, `students`,
+`tpos`, `admins`, `resumes`, `placement_drives`, `companies`, `applications`,
+`question_categories`, `questions`, `assessments`, `assessment_templates`,
+`assessment_attempts`, `knowledge_states`, `activity_logs`, `notifications`
+(index-only/unused), `unmapped_skill_suggestions`, `knowledge_chunks`,
+`insights_narrative_cache`, `job_market_postings`, `market_skill_catalog`,
+`market_import_runs`.
+
+**Most common bug source:** confusing `users._id` with the profile `_id`. Always
+resolve through `StudentRepository.get_by_user_id()` (or the TPO/admin
+equivalent) before writing operational records.
+
+Seeded documents carry `data_origin`, `is_synthetic`, and `synthetic_batch`.
+These are internal audit fields, not user-facing labels.
+
+---
+
+## 5. Environment and commands
 
 ```powershell
 # Backend
-cd "D:\Student Eval Sys\placer\backend"
+cd backend
+python -m venv .venv
 .venv\Scripts\Activate.ps1
 .venv\Scripts\python.exe -m pip install -r requirements.txt
-.venv\Scripts\python.exe -m spacy download en_core_web_sm   # if not already done
-copy .env.example .env   # then set a real JWT_SECRET_KEY (see .env.example for how to generate)
-.venv\Scripts\python.exe -m pytest -v   # should show 82 passed
+.venv\Scripts\python.exe -m spacy download en_core_web_sm
+copy .env.example .env
+# set JWT_SECRET_KEY
 
-# Run it
-uvicorn app.main:app --reload --port 8000
-# Swagger UI at http://localhost:8000/api/docs
+# Admin (one-time)
+.venv\Scripts\python.exe -m scripts.create_admin
 
-# Frontend (separate terminal)
-cd "D:\Student Eval Sys\placer\frontend"
-npm install
-copy .env.local.example .env.local
-npm run dev
-# http://localhost:3000
+# Seed (optional, recommended)
+.venv\Scripts\python.exe -m scripts.reset_db --yes
+.venv\Scripts\python.exe -m scripts.seed.run_all
+.venv\Scripts\python.exe -m scripts.seed.run_all --verify-only
+
+# Tests
+.venv\Scripts\python.exe -m pytest -q        # 331 tests
+
+# Run
+.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
 ```
 
-MongoDB: either `docker compose up --build` from the `placer/` root (starts Mongo + backend together), or a MongoDB Atlas free-tier connection string in `.env`.
+```powershell
+# Frontend
+cd frontend
+npm install
+copy .env.local.example .env.local
+npm run dev                                   # http://localhost:3000
+```
 
-Google Sign-In needs a free OAuth Client ID from [console.cloud.google.com/apis/credentials](https://console.cloud.google.com/apis/credentials) — set as `GOOGLE_CLIENT_ID` (backend `.env`) and `NEXT_PUBLIC_GOOGLE_CLIENT_ID` (frontend `.env.local`), same value in both. Without it, the Google button just doesn't render — nothing breaks.
+```powershell
+# Full stack + judge
+docker compose build
+docker compose up -d
+docker compose ps
+```
+
+Seeded logins use password **`Placer@2026`** by default:
+
+| Role | Email |
+|---|---|
+| Admin | `admin@placer.edu` |
+| TPO | `tpo@placer.edu` |
+| Students | `student01@placer.edu` … `student50@placer.edu` |
+
+Model weights: place `model.safetensors` under
+`backend/app/ml/matching/artifacts/bi_encoder/` and
+`backend/app/ml/matching/artifacts/cross_encoder/`. Without them the app runs
+and match endpoints return `503`.
+
+LLM/embeddings are optional. Set a hosted provider key, or run Ollama with
+`LLM_USE_LOCAL_OLLAMA=true`. Deterministic fallbacks apply when unavailable.
 
 ---
 
-## 8. Immediate next steps (pick up here)
+## 6. Key decisions to preserve
 
-1. **Ask the user: have the model artifacts arrived from their colleague yet?**
-   - If yes → resume **Phase 7**: request the bi-encoder folder, cross-encoder folder, and calibrator `.pkl` be uploaded; build `app/ml/matching/inference.py` wrapping them exactly as trained; wire into a resume-scoring endpoint.
-   - If no → continue with **Phase 12: Student Dashboard** (frontend) — the next unblocked phase in sequence. This will need to build: resume upload UI, resume score/parsed-data display, drive browsing/application UI, adaptive assessment-taking UI (which is also where Phase 11's anti-cheat client-side pieces — fullscreen API, tab-switch detection, copy/paste blocking — finally get wired in), and knowledge-state visualization.
-2. Whichever path: read `PROJECT_PROGRESS.md` in full first (it's the authoritative, detailed record — this summary is a compressed pointer to it, not a replacement).
-3. Continue the same phase-by-phase discipline: implement, compile-check, package as a zip, user tests on their machine, report back, fix real bugs, proceed.
+1. **Profile ID, not user ID.** Operational collections reference the student
+   profile `_id`. Resolve through repositories.
+2. **Never write Pydantic model instances straight into Mongo.** Use
+   `.model_dump(mode="json")` when appending fetched model objects to list
+   fields.
+3. **Repository pattern throughout.** `BaseRepository[ModelT]` provides CRUD;
+   services never touch Motor directly.
+4. **Auth token split.** Access token in memory only; refresh token in an
+   httpOnly cookie that rotates on every use.
+5. **Storage abstraction.** Local disk or Cloudinary selected by
+   `STORAGE_BACKEND`; the DB stores `local://` pseudo-URLs, never absolute paths.
+6. **Parsing degrades gracefully.** spaCy is optional at runtime; OCR is
+   config-gated; LLM skill extraction falls back to regex.
+7. **Knowledge tracing is EMA, not BKT.** Chosen because calibrated BKT
+   parameters need real usage data the project does not have.
+8. **Adaptive assessment** starts at Medium, steps up on correct and down on
+   wrong, with fallback when a difficulty pool is exhausted.
+9. **Grading boundaries.** MCQ automatic, coding via the runner/judge,
+   descriptive stored ungraded for manual/API review.
+10. **Anti-cheat is partially server-side.** Timers and violations are recorded;
+    fullscreen and fingerprint are not enforced server-side.
+11. **Question sourcing is local.** No web scraping or trivia API; manual bulk
+    import is the supported path.
+12. **AI never invents numbers.** Prompts receive computed values and narrate
+    them; fallbacks preserve deterministic data.
+13. **Provenance is internal.** `data_origin` / `is_synthetic` support audit but
+    are not rendered as demo labels (the Market Insights source banner is the
+    deliberate exception).
 
 ---
 
-## 9. Files to bring into the new chat
+## 7. Known limitations
 
-- **This summary** (paste as first message)
-- **`placer_phase11.zip`** (or whatever the latest phase zip is) — extract to `D:\Student Eval Sys\placer\`, replace all
-- The original **`PLACER_RoBERTa_Training_NEW.ipynb`** notebook, if starting a fresh chat that hasn't seen it — needed context for Phase 7 whenever it unblocks
-- Model artifacts from the colleague, whenever they arrive
+- Live deployment (Vercel/Render/Atlas) is documented but not provisioned.
+- Matching needs external model weights; otherwise match endpoints `503`.
+- LLM/RAG needs provider keys or Ollama; deterministic fallbacks otherwise.
+- The local code runner is not a hardened sandbox — use the judge service for
+  shared environments.
+- Descriptive grading is API-only; the TPO Descriptive Review page was removed.
+- Anti-cheat fullscreen/fingerprint checks are not backend-enforced.
+- `notifications` is index-only; no notification UI or read/write path.
+- The admin applications workspace supports cross-drive records, analytics, and
+  status updates, but company CRUD and some admin management screens are not
+  implemented.
+- Drive deletion does not cascade-delete applications.
+- `password_reset_tokens`, `knowledge_chunks`, and
+  `insights_narrative_cache` lack explicit startup indexes/TTLs.
+- Rate limiting is applied only to selected routes.
+
+The authoritative gap list is
+`docs/PLACER_SYSTEM_DESIGN_AND_DATA_FLOW.md` §16.
+
+---
+
+## 8. Where to start as the next maintainer
+
+1. Read [`README.md`](./README.md) and run the backend tests.
+2. Read [`docs/SYSTEM_FLOW.md`](./docs/SYSTEM_FLOW.md) for behaviour, then the
+   detailed design doc for page-by-page flows.
+3. Use [`credentials.md`](./credentials.md) to verify each role locally.
+4. Before changing a formula, check
+   `docs/PLACER_MATHEMATICAL_FORMULAS_AND_ALGORITHMS.md` and the formula-to-code
+   map.
+5. Keep the docs in sync: `README.md`, `docs/SYSTEM_FLOW.md`, the design doc,
+   the formulas doc, and `docs/SEED_DATA.md` are the current documentation set.
+
+**Useful source-of-truth files**
+- `backend/app/main.py` — router registration and middleware.
+- `backend/app/core/config.py` — every feature flag.
+- `backend/app/services/matching_service.py` — hybrid score.
+- `backend/app/services/assessment_service.py` — attempt lifecycle/grading.
+- `backend/app/services/screening_service.py` — applicant reconciliation.
+- `backend/app/models/assessment.py` — placement sections/quotas/marks.
+- `frontend/app/(student|tpo|admin)/layout.tsx` — role navigation.
+- `backend/scripts/seed/` — deterministic dataset.

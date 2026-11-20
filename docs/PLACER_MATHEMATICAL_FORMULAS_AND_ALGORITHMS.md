@@ -2082,7 +2082,8 @@ These names appear in comments, docs or design intent. They are **not** computed
 | Deployment and health | Group A | §13 "Deployment and runtime" |
 | Security and error handling | — | §14 "Error handling, security, and observability" |
 | Role interfaces (pages → APIs → collections) | Group E1/E2/E3 | §3 "Interface A — Student", §4 "Interface B — TPO", §5 "Interface C — Admin" |
+| End-to-end behaviour and request lifecycle | — | [`SYSTEM_FLOW.md`](./SYSTEM_FLOW.md) |
 
-**Terminology used consistently across all three documents:** Applied, Under Review (= applied), Shortlisted, Rejected, Students with Applications, Monthly Application Trends, Drive Assessment, Assessment Builder. "Placed Students" and "Selected" are not user-facing stages.
+**Terminology used consistently across all four documents:** Applied, Under Review (= applied), Shortlisted, Rejected, Students with Applications, Monthly Application Trends, Drive Assessment, Assessment Builder. "Placed Students" and "Selected" are not user-facing stages.
 
 

@@ -1,620 +1,363 @@
-# 🎓 PLACER — AI-Powered Campus Recruitment & Placement Assistance System
+# PLACER — Detailed Feature & Architecture Reference
 
-> **Intelligent Student Evaluation, Resume Semantic Matching, Adaptive Skill Assessments & Placement Analytics Platform**
+> **Canonical quickstart:** [`README.md`](./README.md). This file is the longer
+> reference for features, architecture, the AI pipeline, and the API surface.
+> For end-to-end behaviour see [`docs/SYSTEM_FLOW.md`](./docs/SYSTEM_FLOW.md);
+> for page-by-page data flow and the full API reference see
+> [`docs/PLACER_SYSTEM_DESIGN_AND_DATA_FLOW.md`](./docs/PLACER_SYSTEM_DESIGN_AND_DATA_FLOW.md).
 
-[![Python Version](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-009688.svg?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
-[![Next.js](https://img.shields.io/badge/Next.js-15.5-black.svg?logo=next.js&logoColor=white)](https://nextjs.org/)
-[![React](https://img.shields.io/badge/React-19.0-61DAFB.svg?logo=react&logoColor=black)](https://react.dev/)
-[![MongoDB](https://img.shields.io/badge/MongoDB-7.0-47A248.svg?logo=mongodb&logoColor=white)](https://www.mongodb.com/)
-[![Tailwind CSS](https://img.shields.io/badge/Tailwind-3.4-38B2AC.svg?logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-EE4C2C.svg?logo=pytorch&logoColor=white)](https://pytorch.org/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+**PLACER** (**P**lacement & **L**earning **A**ssistance with **C**andidate
+**E**valuation & **R**anking) is a full-stack campus recruitment and placement
+platform for Students, TPOs, and Admins.
 
----
-
-## 📌 Table of Contents
-
-- [Overview](#-overview)
-- [Key Features & Role Portals](#-key-features--role-portals)
-  - [1. Student Portal](#1-student-portal)
-  - [2. Training & Placement Officer (TPO) Portal](#2-training--placement-officer-tpo-portal)
-  - [3. Administrator Portal](#3-administrator-portal)
-- [Machine Learning & AI Architecture](#-machine-learning--ai-architecture)
-  - [Resume Parsing & Skill Normalization](#resume-parsing--skill-normalization)
-  - [Two-Stage Semantic Matching & Platt Calibration](#two-stage-semantic-matching--platt-calibration)
-  - [Adaptive Assessment & Knowledge Tracing (EMA)](#adaptive-assessment--knowledge-tracing-ema)
-  - [Anti-Cheat & Proctoring Engine](#anti-cheat--proctoring-engine)
-  - [LLM & RAG Integration (Narrative Gap Analysis & JD Explanation)](#llm--rag-integration)
-- [System Architecture](#-system-architecture)
-- [Tech Stack](#-tech-stack)
-- [Directory Structure](#-directory-structure)
-- [Getting Started & Installation](#-getting-started--installation)
-  - [Prerequisites](#prerequisites)
-  - [1. Clone Repository & Setup Model Weights](#1-clone-repository--setup-model-weights)
-  - [2. Backend Setup](#2-backend-setup)
-  - [3. Frontend Setup](#3-frontend-setup)
-  - [4. Environment Variables Configuration](#4-environment-variables-configuration)
-  - [5. Database & Admin Bootstrapping](#5-database--admin-bootstrapping)
-- [API Reference](#-api-reference)
-- [Running Automated Tests](#-running-automated-tests)
-- [Security & Authentication](#-security--authentication)
-- [Troubleshooting & FAQs](#-troubleshooting--faqs)
+| Layer | Technology |
+|---|---|
+| Frontend | Next.js 15.5 (App Router), React 19, TypeScript, Tailwind, Recharts, TanStack Query |
+| Backend | FastAPI (Python 3.12), Pydantic v2, Motor async MongoDB driver |
+| Database | MongoDB 7 (`placer_db`, 24 collections) |
+| Auth | JWT access token (memory) + rotating httpOnly refresh cookie, RBAC, optional Google Sign-In |
+| Matching | Fine-tuned bi-encoder + cross-encoder + Platt calibration |
+| Parsing | PyMuPDF, pdfplumber, PaddleOCR PP-OCRv4, spaCy, LLM skill extraction |
+| LLM / RAG | OpenAI-compatible primary + fallback client; MongoDB cosine vector store |
+| Code execution | Python/JavaScript subprocess runner, local or isolated judge container |
+| Tests | pytest + pytest-asyncio + mongomock-motor — **331 tests** |
 
 ---
 
-## 🌟 Overview
+## 1. Role capabilities
 
-**PLACER** (**P**lacement & **L**earning **A**ssistance with **C**andidate **E**valuation & **R**anking) is an enterprise-grade, full-stack campus recruitment and placement assistance ecosystem. It bridges the gap between students, Training & Placement Officers (TPOs), and institutional administrators by unifying:
+### Student portal
+- **Profile:** academic details, links, skills, achievements, certificates,
+  completeness percentage.
+- **Resume:** PDF upload, SHA-256 dedupe, version history, one active version,
+  synchronous parsing, OCR fallback, parsed preview, download, reparse.
+- **Autofill:** reviewable suggestion built from the parsed resume; applying it
+  fills only empty/derived profile fields.
+- **Drives:** browse open drives, server-side eligibility (CGPA, department,
+  batch year), match score with matched/missing skills, apply, track status.
+- **Assessments:** adaptive practice papers and standardized drive papers,
+  timers, anti-cheat events, coding questions with visible samples, results.
+- **Learning:** skill mastery and insights narrative in the UI; per-attempt gap
+  analysis is API-only.
 
-1. **Automated Resume Parsing & Quality Scoring**
-2. **AI-Powered Two-Stage Semantic Matching** (Bi-Encoder Retrieval + Cross-Encoder Reranking with Platt Calibration)
-3. **Adaptive Skill Assessments & Knowledge Tracing** with anti-cheat protection
-4. **LLM-Driven Diagnostic Gap Analysis & Explainable AI (XAI)**
-5. **Real-time Placement Drive Management & Institutional Analytics**
+### TPO portal
+- **Drives:** create/edit/clone, open/close, JD, required skills, eligibility,
+  deadline, linked standardized assessment, applicant list.
+- **Screening:** recompute match scores, reconcile assessment pass/fail,
+  recommended shortlist, bulk/individual shortlist/reject, CSV export.
+- **Analytics:** application status, drive funnels, department/company views,
+  participation, assessment ranking.
+- **Market Insights:** demand by skill, trending/declining momentum, filters,
+  comparison, import-run provenance.
+- **Skill Gaps:** student evidence (assessment-demonstrated + self-reported) vs
+  market demand, filterable by department/batch/company/drive.
 
-Built to operate efficiently on modern developer infrastructure and free-tier production hosts (FastAPI, MongoDB Atlas, Next.js on Vercel), PLACER delivers high-accuracy candidate matching without requiring heavy external paid APIs.
-
----
-
-## 🚀 Key Features & Role Portals
-
-### 1. Student Portal
-- **Smart Profile Management**: Real-time completeness calculation across academic, project, skill, and social profiles.
-- **Resume Management & Multi-Version History**: PDF upload, automatic SHA-256 deduplication, versioning, asynchronous parsing, and structured preview.
-- **Placement Drive Discovery**: Browse open placement drives with automated server-side eligibility checks (CGPA cutoff, department, batch year).
-- **Match Score & Explainability**: Real-time compatibility rating against job descriptions showing matched skills, missing skills, and overall fit.
-- **Adaptive Assessments**: Computerized adaptive test interface that adjusts difficulty in real time based on past responses.
-- **Skill Mastery Insights**: Knowledge tracing visualizer displaying skill proficiencies and radar breakdowns.
-- **LLM Gap Analysis**: AI-generated improvement roadmap detailing weak areas and recommended learning steps.
-
-### 2. Training & Placement Officer (TPO) Portal
-- **Drive Lifecycle Management**: Create, edit, open/close, and manage campus drives with granular eligibility rules.
-- **AI-Ranked Applicant Dashboard**: Candidate sorting based on the multi-factor hybrid match score.
-- **Deep-Dive Candidate Review**: 1-click access to candidate resumes, parsed profile summaries, and live skill mastery radar data.
-- **Application Status Pipeline**: Dynamic candidate progression (`Applied` $\rightarrow$ `Shortlisted` $\rightarrow$ `Selected` $\rightarrow$ `Rejected`).
-- **TPO Placement Funnel Analytics**: Visual representation of drive conversion rates, applicant counts, and hiring statistics.
-
-### 3. Administrator Portal
-- **Centralized Question Bank**: Comprehensive CRUD supporting Multiple Choice Questions (MCQs), Coding questions (exact output matching), and Descriptive questions.
-- **Hierarchical Categories & Tags**: Tagging questions by difficulty (`Easy`, `Medium`, `Hard`) and domain topics.
-- **Bulk Import / Export**: One-click bulk JSON question import and export utilities.
-- **Assessment Builder**: Configure dynamic assessments with custom question pool limits, time limits, and anti-cheat policies.
-- **Platform Analytics**: Institutional-level insights into placement percentage, overall attempt statistics, and weakest-first skill mastery trends.
-- **Secure CLI Bootstrapping**: Zero-public-exposure administrative account provisioning script.
-
----
-
-## 🧠 Machine Learning & AI Architecture
-
-```
-                                  ┌────────────────────────────────┐
-                                  │       Student Resume (PDF)     │
-                                  └───────────────┬────────────────┘
-                                                  │
-                                          PyMuPDF / spaCy
-                                                  │
-                                                  ▼
-                                  ┌────────────────────────────────┐
-                                  │   Parsed Skills & Experience   │
-                                  └───────────────┬────────────────┘
-                                                  │
- ┌───────────────────────────────┐                │
- │    Job Description (JD)       │                │
- └───────────────┬───────────────┘                │
-                 │                                │
-                 ▼                                ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                   STAGE 1: BI-ENCODER RETRIEVAL                  │
-│       all-MiniLM-L6-v2 Embeddings & Cosine Similarity Ranking    │
-│              (Narrows Candidate Pool to Top Candidates)          │
-└────────────────────────────────┬─────────────────────────────────┘
-                                 │
-                                 ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                  STAGE 2: CROSS-ENCODER RERANKING                │
-│             cross-encoder/stsb-roberta-base Joint Scoring        │
-└────────────────────────────────┬─────────────────────────────────┘
-                                 │
-                                 ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                     PLATT CALIBRATION LAYER                      │
-│            Logistic Regression logit-to-probability map          │
-└────────────────────────────────┬─────────────────────────────────┘
-                                 │
-                                 ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                      HYBRID SCORING FORMULA                      │
-│   Final = 0.50 * Calibrated_Semantic + 0.35 * Skill_Coverage     │
-│                     + 0.15 * Experience_Fit                      │
-└──────────────────────────────────────────────────────────────────┘
-```
-
-### Resume Parsing, Intelligent Fallback & PaddleOCR (PP-OCRv4)
-- **Multi-Stage Text Extraction**:
-  1. **PyMuPDF (`fitz`)**: Fast, native digital text extraction (<50ms).
-  2. **`pdfplumber` Fallback**: Invoked when text encodings or PDF structures fail under PyMuPDF.
-  3. **Intelligent Text Quality Evaluator**: Inspects character counts, alphanumeric density, and word distribution to detect image-only or scanned documents.
-  4. **PaddleOCR (PP-OCRv4) Engine**: Automatically renders pages into high-resolution rasters and executes local OCR on scanned resumes, mixed image/text documents, or unparseable PDFs.
-  5. **OCR Normalization Layer**: Cleans OCR line fragmentation and whitespace anomalies while preserving line boundaries for section parsing.
-- **Named Entity Recognition (NER)**: spaCy `en_core_web_sm` model with heuristic line-validation fallbacks for candidate name identification.
-- **Skill Normalizer**: Curated dictionary and alias-squashing system (e.g., `react.js` $\rightarrow$ `react`, `k8s` $\rightarrow$ `kubernetes`) to standardize skills across varying candidate terminology across both digital and OCR-derived text.
-- **Lazy Singleton Architecture**: PaddleOCR engine loads on-demand on the first scanned document request, preventing slow startup times and conserving memory for normal digital text processing.
-
-
-### Two-Stage Semantic Matching & Platt Calibration
-1. **Bi-Encoder Retrieval**: Generates dense vector representations using a fine-tuned `all-MiniLM-L6-v2` bi-encoder. Computes cosine similarity to quickly rank and retrieve the top-N candidate matches.
-2. **Cross-Encoder Pairwise Reranking**: Passes candidate-job text pairs through a fine-tuned `cross-encoder/stsb-roberta-base` model with joint attention across both documents.
-3. **Platt Calibration**: Applies a fitted Logistic Regression model on cross-encoder logits to convert raw outputs into true probabilistic match scores.
-4. **Hybrid Scoring Engine**:
-   $$\text{Final Score} = 0.50 \times \text{Semantic Score} + 0.35 \times \text{Skill Coverage} + 0.15 \times \text{Experience Fit}$$
-   Where:
-   $$\text{Skill Coverage} = \frac{|\text{Resume Skills} \cap \text{JD Skills}|}{\max(1, |\text{JD Skills}|)}$$
-   $$\text{Experience Fit} = \min\left(1.0, \frac{\text{Candidate Years}}{\max(1, \text{Required Years})}\right)$$
-
-### Adaptive Assessment & Knowledge Tracing (EMA)
-- **Dynamic Difficulty Adjustment**: Assessment begins at `Medium` tier. Correct answers increase difficulty (`Medium` $\rightarrow$ `Hard`), while incorrect answers step down (`Medium` $\rightarrow$ `Easy`), with automatic fallback when a difficulty pool is exhausted.
-- **Knowledge Tracing Heuristic**: Tracks skill mastery using an Exponential Moving Average (EMA):
-  $$\text{Mastery}_{t} = (1 - \alpha) \cdot \text{Mastery}_{t-1} + \alpha \cdot \text{Result}$$
-  Maintains an uncalibrated, empirical mastery score per skill tag across all student attempts.
-
-### Anti-Cheat & Proctoring Engine
-- **Session Token Binding**: Unique secure test session token per browser attempt instance.
-- **Server-Side Enforcement**: Strict server-side timer validation and auto-submission on expiry.
-- **Option Randomization**: Dynamic per-delivery MCQ option shuffling (graded on option value, not index).
-- **Violation Logging**: Real-time capture of client-side events:
-  - Fullscreen exit / cancellation
-  - Tab switching (`visibilitychange` API)
-  - Clipboard copy/paste attempts
-  - DevTools opening
-- **Automatic Disqualification**: Configurable violation threshold triggering auto-submission.
-- **Fast-Answer Auditing**: Flags answers submitted in $<3$ seconds to `activity_logs` for review.
-
-### LLM & RAG Integration
-- **Agnostic LLM Client**: Unified interface supporting **NVIDIA NIM** (`Nemotron-4-340B-Instruct`), **OpenRouter** (`Qwen-2.5`), or local **Ollama** (`qwen3:8b`).
-- **Narrative Gap Analysis**: Ingests test attempt performance and generates human-readable diagnostics and action plans.
-- **Explainable Match Narratives**: Translates hybrid match scores into structured, conversational feedback for candidates.
-- **Vector Knowledge Store**: Lightweight cosine vector store over MongoDB embeddings using `nomic-embed-text`.
+### Admin portal
+- **Question bank:** CRUD, categories, difficulty/type filters, coding sample
+  tests, bulk Excel/CSV preview + commit, Excel/CSV export.
+- **Assessments:** templates and presets, standardized placement-paper
+  generation, revision, participation, platform-wide listing.
+- **Applications workspace:** cross-drive application records and analytics.
+- **Platform:** admin analytics and activity summary, LLM/embedding
+  observability endpoints, RAG knowledge-store ingest/delete/stats endpoints.
+- **Bootstrap:** admin accounts are created only through
+  `backend/scripts/create_admin.py`; there is no public admin registration.
 
 ---
 
-## 📐 System Architecture
+## 2. System architecture
 
 ```mermaid
 graph TD
-    subgraph Frontend ["Next.js 15 App Router (React 19 + TypeScript + Tailwind)"]
-        UI_STUDENT["Student Dashboard\n(/dashboard)"]
-        UI_TPO["TPO Dashboard\n(/tpo/dashboard)"]
-        UI_ADMIN["Admin Dashboard\n(/admin/dashboard)"]
-        AUTH_CTX["Auth Context & Cookie Manager"]
-    end
+    Browser["Browser<br/>Next.js App Router"]
+    Proxy["Next.js server :3000<br/>/api/backend/* → /api/v1/*"]
+    API["FastAPI :8000<br/>routers → services → repositories"]
+    Mongo[("MongoDB 7 :27017<br/>placer_db")]
+    Judge["Judge container<br/>judge_net, no published port"]
+    LLM["LLM + embedding providers<br/>(optional, config-gated)"]
+    Store[("Resume storage<br/>local disk or Cloudinary")]
 
-    subgraph API_Gateway ["FastAPI Application Backend (:8000)"]
-        ROUTER_AUTH["/api/v1/auth"]
-        ROUTER_RESUME["/api/v1/resumes"]
-        ROUTER_DRIVES["/api/v1/drives"]
-        ROUTER_MATCH["/api/v1/matching"]
-        ROUTER_ASSESS["/api/v1/assessments"]
-        ROUTER_ADMIN["/api/v1/questions"]
-        ROUTER_ANALYTICS["/api/v1/analytics"]
-        ROUTER_LLM["/api/v1/gap-analysis & jd-explanation"]
-    end
-
-    subgraph Service_Layer ["Core Services & ML Engines"]
-        SRV_AUTH["AuthService (JWT + RBAC)"]
-        SRV_PARSE["ResumeParsingService (spaCy + PyMuPDF)"]
-        SRV_MATCH["MatchingService (Bi/Cross Encoders)"]
-        SRV_ASSESS["AssessmentService & KnowledgeTracing"]
-        SRV_LLM["LLMClient & KnowledgeStore"]
-    end
-
-    subgraph Persistence ["Storage & Data Layer"]
-        MONGO[("MongoDB 7.0 (Motor Async Driver)")]
-        LOCAL_STORAGE[("Local File System / Cloudinary")]
-        ML_MODELS[("ML Weights (.safetensors, .pkl)")]
-    end
-
-    UI_STUDENT -->|HTTP / REST| API_Gateway
-    UI_TPO -->|HTTP / REST| API_Gateway
-    UI_ADMIN -->|HTTP / REST| API_Gateway
-    AUTH_CTX -.->|httpOnly Cookie| ROUTER_AUTH
-
-    ROUTER_AUTH --> SRV_AUTH
-    ROUTER_RESUME --> SRV_PARSE
-    ROUTER_DRIVES --> SRV_MATCH
-    ROUTER_MATCH --> SRV_MATCH
-    ROUTER_ASSESS --> SRV_ASSESS
-    ROUTER_LLM --> SRV_LLM
-
-    SRV_AUTH --> MONGO
-    SRV_PARSE --> LOCAL_STORAGE
-    SRV_PARSE --> MONGO
-    SRV_MATCH --> ML_MODELS
-    SRV_MATCH --> MONGO
-    SRV_ASSESS --> MONGO
-    SRV_LLM --> MONGO
+    Browser -->|same-origin fetch| Proxy
+    Proxy --> API
+    API --> Mongo
+    API --> Store
+    API -->|CODE_EXECUTION_BACKEND=judge| Judge
+    API -->|narratives, embeddings| LLM
 ```
 
----
+**Request path:** axios wrapper (`lib/api-client.ts`) → Next.js rewrite →
+`RequestIdMiddleware` → `CORSMiddleware` → `get_current_user` /
+`require_role(...)` → router validation → service → repository → MongoDB.
+A `401` triggers one refresh-and-retry via `/auth/refresh`.
 
-## 💻 Tech Stack
-
-| Layer | Technology | Description |
-|---|---|---|
-| **Frontend Framework** | Next.js 15.5 (App Router) | Server/Client rendering, Route Groups, React 19 |
-| **Styling & UI** | Tailwind CSS 3.4 + Radix UI | Dark/Light theme, accessible Shadcn primitives |
-| **State & Data Fetching** | TanStack React Query v5 | Auto-caching, mutations, optimistic refetches |
-| **Form Management** | React Hook Form + Zod | Schema-based validation & error handling |
-| **Data Visualization** | Recharts & Framer Motion | Analytics charts, funnel graphs, smooth transitions |
-| **Backend API** | FastAPI (Python 3.11+) | Async ASGI framework, high-performance REST APIs |
-| **Database Driver** | Motor + PyMongo | Asynchronous MongoDB connector |
-| **Authentication** | PyJWT + Passlib + Google Auth | Dual-token rotation (in-memory access + httpOnly refresh) |
-| **NLP & Resume Parsing** | PyMuPDF, pdfplumber, spaCy | Multi-engine text extraction & NER |
-| **Machine Learning** | PyTorch, Transformers, Scikit-learn | RoBERTa bi/cross-encoders, Platt logistic calibration |
-| **LLM & Generative AI** | OpenAI SDK, Ollama / NVIDIA NIM | RAG narrative synthesis, skill gap diagnosis |
-| **Testing** | pytest, pytest-asyncio, mongomock-motor | 100+ automated unit and integration tests |
-| **DevOps & Containers** | Docker & Docker Compose | Containerized backend & MongoDB services |
+**Design boundaries:**
+- Routers stay thin; business logic lives in `app/services/`.
+- One repository per collection; services never touch Motor directly.
+- LLMs narrate already-computed numbers and never invent scores.
+- AI failures fail soft: deterministic fallback data or a clear `503`.
 
 ---
 
-## 📁 Directory Structure
+## 3. Resume and AI pipeline
 
 ```text
-Student-Evaluation-and-Improvement-System/
-├── backend/
-│   ├── app/
-│   │   ├── core/                  # Configuration, database connection, security, deps
-│   │   │   ├── config.py          # Pydantic BaseSettings (.env reader)
-│   │   │   ├── database.py        # Motor async client & index definitions
-│   │   │   ├── security.py        # Bcrypt hashing & JWT creation/verification
-│   │   │   └── deps.py            # FastAPI dependency injections (RBAC)
-│   │   ├── models/                # Pydantic Schemas & MongoDB Document models
-│   │   │   ├── user.py            # User, Student, TPO, Admin models
-│   │   │   ├── resume.py          # Resume document & parsed structures
-│   │   │   ├── drive.py           # PlacementDrive, Company, Application models
-│   │   │   ├── assessment.py      # Question, Assessment, Attempt models
-│   │   │   └── analytics.py       # Analytics response structures
-│   │   ├── repositories/          # Repository Pattern abstraction (Motor CRUD)
-│   │   ├── services/              # Pure business logic layer
-│   │   │   ├── auth_service.py
-│   │   │   ├── resume_service.py
-│   │   │   ├── resume_parsing_service.py
-│   │   │   ├── matching_service.py
-│   │   │   ├── assessment_service.py
-│   │   │   ├── knowledge_tracing_service.py
-│   │   │   └── analytics_service.py
-│   │   ├── routers/               # FastAPI route definitions
-│   │   │   ├── auth.py
-│   │   │   ├── resumes.py
-│   │   │   ├── drives.py
-│   │   │   ├── matching.py
-│   │   │   ├── assessments.py
-│   │   │   ├── questions.py
-│   │   │   ├── students.py
-│   │   │   └── analytics.py
-│   │   ├── ml/                    # Machine Learning sub-packages
-│   │   │   ├── parsing/           # spaCy entity extractor, skill normalizer, text extractors
-│   │   │   ├── matching/          # Inference wrapper, calibrator, skill ontology
-│   │   │   │   └── artifacts/     # ML model weights (.safetensors, .pkl)
-│   │   │   ├── llm/               # Model-agnostic LLM client & exception handlers
-│   │   │   └── rag/               # Vector knowledge store & retrieval logic
-│   │   └── main.py                # App factory, CORS, Rate limiting & lifespan
-│   ├── scripts/
-│   │   └── create_admin.py        # Interactive Admin Account creation CLI
-│   ├── storage/                   # Local uploaded resume PDFs (git-ignored)
-│   ├── tests/                     # 100+ pytest test suite
-│   ├── Dockerfile
-│   ├── requirements.txt
-│   └── .env.example
-├── frontend/
-│   ├── app/
-│   │   ├── (auth)/                # Auth route group (/login, /register)
-│   │   ├── (student)/             # Student route group (/dashboard, /resume, /drives, /assessments)
-│   │   ├── (tpo)/                 # TPO route group (/tpo/dashboard, /tpo/dashboard/drives)
-│   │   ├── (admin)/               # Admin route group (/admin/dashboard, /questions, /assessments)
-│   │   ├── layout.tsx             # Root layout with Query & Auth Providers
-│   │   └── globals.css            # Tailwind design tokens & themes
-│   ├── components/
-│   │   ├── ui/                    # Reusable Radix/ShadCN UI components
-│   │   └── shared/                # DashboardShell, MatchScoreCard, StatCard, Charts
-│   ├── hooks/                     # Custom React Query hooks (useResumes, useDrives, etc.)
-│   ├── lib/                       # Axios API client, token-store, client fingerprinting
-│   ├── providers/                 # AuthProvider, QueryProvider
-│   ├── types/                     # TypeScript type definitions
-│   ├── package.json
-│   └── tailwind.config.ts
-├── docker-compose.yml             # Local multi-container Docker compose definition
-├── PROJECT_PROGRESS.md            # Comprehensive phase-by-phase implementation log
-└── README.md                      # Original quickstart guide
+PDF bytes
+  → size cap, %PDF signature, SHA-256 dedupe
+  → storage (local / Cloudinary)
+  → PyMuPDF text extraction
+  → pdfplumber fallback
+  → OCR (PaddleOCR PP-OCRv4) when text is short/noisy
+  → regex structural parse (contact, education, experience, projects, skills)
+  → LLM skill extraction (regex fallback)
+  → profile autofill suggestion
+  → cached bi-encoder embedding on the resume
+  → drive match scoring
+  → grounded explanation / insights / gap analysis
 ```
 
----
+### Text extraction and OCR
+- PyMuPDF is primary; pdfplumber is the fallback.
+- OCR triggers when extracted characters are below
+  `OCR_TRIGGER_MIN_CHARS` (50) or the alphanumeric ratio is below
+  `OCR_MIN_ALPHANUMERIC_RATIO` (0.5).
+- Pages render at `OCR_RENDER_DPI` (150); OCR is disabled with
+  `OCR_ENABLED=false`.
+- OCR engine is a lazy singleton, so normal digital resumes do not pay the
+  startup/memory cost.
 
-## 🛠️ Getting Started & Installation
+### Skill extraction
+- A 135-skill canonical taxonomy with 235 aliases is shared by resumes, drives,
+  matching, and analytics (`backend/app/core/skill_taxonomy.py`).
+- The LLM extractor uses a constrained vocabulary; unknown phrases are queued in
+  `unmapped_skill_suggestions` for future review.
+- If the LLM is unavailable, regex skills are returned rather than an empty set.
 
-### Prerequisites
-- **Python 3.11+**
-- **Node.js 20+** and **npm**
-- **MongoDB 7.0+** (Local MongoDB service, Docker container, or MongoDB Atlas)
-- **Git**
+### Matching
+Artifacts:
+- `bi_encoder/` — fine-tuned `all-MiniLM-L6-v2`
+- `cross_encoder/` — fine-tuned `cross-encoder/stsb-roberta-base`
+- `calibrator.pkl` — sklearn `LogisticRegression` (Platt scaling)
 
----
+Pipeline: embed → cosine retrieval (`DEFAULT_RETRIEVER_POOL = 100`) →
+cross-encoder rerank → sigmoid → Platt calibration → hybrid score.
 
-### 1. Clone Repository & Setup Model Weights
-
-```bash
-git clone https://github.com/anvitac7/Student-Evaluation-and-Improvement-System.git
-cd Student-Evaluation-and-Improvement-System
-```
-
-#### ML Weights Setup (Optional for basic features, Required for Semantic Matching)
-The pre-trained Transformer weights (~560 MB combined) should be placed in the artifacts folder:
 ```text
-backend/app/ml/matching/artifacts/
-├── bi_encoder/
-│   ├── config.json
-│   ├── tokenizer.json
-│   └── model.safetensors
-├── cross_encoder/
-│   ├── config.json
-│   ├── tokenizer.json
-│   └── model.safetensors
-└── calibrator.pkl
+skills_score     = |resume_skills ∩ jd_required_skills| / max(1, |jd_required_skills|)
+experience_score = clamp(resume_years / jd_years, 0, 1)      # 1.0 if jd_years = 0
+assessment_term  = assessment_pct / 100                       # 1.0 if not required/unscored
+final_score      = 0.40·semantic + 0.30·skills + 0.20·experience + 0.10·assessment
 ```
-*(If model weights are not present, the system operates normally and semantic match endpoints return `503 Service Unavailable` without crashing the application).*
+
+Embeddings are cached as `resumes.resume_embedding` and
+`placement_drives.jd_embedding`. Drive edits invalidate the JD embedding;
+re-parsing a resume recomputes its embedding. Missing weights return `503`
+rather than crashing the app.
+
+### LLM and RAG
+- One client interface with primary + fallback providers (NVIDIA NIM,
+  OpenRouter, Gemini, or local Ollama).
+- Retries only on transient failures (`429`, `5xx`, connection, timeout), with
+  exponential backoff; `4xx` fails immediately.
+- Grounded services:
+  - `GET /applications/{id}/explanation`
+  - `GET /drives/{id}/match-explanation`
+  - `GET /insights/me`
+  - `GET /assessments/attempts/{id}/gap-analysis`
+- Knowledge chunks live in `knowledge_chunks`; cosine similarity is computed in
+  Python (`KNOWLEDGE_STORE_BACKEND=mongodb_cosine`).
+- Metrics are exposed at `GET /admin/observability/llm`.
 
 ---
 
-### 2. Backend Setup
+## 4. Assessment and grading
 
-1. **Navigate to the backend directory and create a virtual environment**:
-   ```bash
-   cd backend
-   python -m venv .venv
-   ```
+### Creation paths
+| Path | Who | Endpoint | Format |
+|---|---|---|---|
+| Adaptive paper | Admin | `POST /assessments` | `adaptive` |
+| Standardized drive paper | Admin | `POST /assessments/placement/generate` | `standardized` |
+| Template-derived | Admin | `/assessments/templates/*` then placement generation | `standardized` |
 
-2. **Activate the virtual environment**:
-   - **Windows (PowerShell)**:
-     ```powershell
-     .venv\Scripts\Activate.ps1
-     ```
-   - **Linux / macOS**:
-     ```bash
-     source .venv/bin/activate
-     ```
+Standardized placement papers use five sections (Quantitative Aptitude, Logical
+Reasoning, Verbal Ability, Technical Knowledge, Coding/Problem Solving),
+20 questions, a 6/10/4 easy/medium/hard quota, and 1/3/5 marks per difficulty.
+Generation is deterministic and returns `422` with explicit deficits rather than
+inventing questions.
 
-3. **Install dependencies**:
-   ```bash
-   pip install -r requirements.txt
-   ```
+### Attempt lifecycle
+1. `POST /assessments/{id}/start` validates publication, retake policy, and
+   assessment type; creates an attempt with a session token.
+2. Questions are delivered one at a time; answers and violations are persisted.
+3. `POST /assessments/attempts/{id}/finish` grades answers, updates
+   `knowledge_states`, and sets `status=submitted`.
+4. `GET /assessments/attempts/{id}/results` returns the breakdown.
 
-4. **Download spaCy language model**:
-   ```bash
-   python -m spacy download en_core_web_sm
-   ```
+### Grading
+- MCQ/true-false: exact match; multiple-select: all-or-nothing.
+- Coding: all test cases must pass, executed by the runner/judge.
+- Descriptive: stored ungraded for manual review; no automatic free-text grader.
+- Negative marking applies only to standardized assessments and only to wrong
+  auto-gradable answers.
 
-5. **Configure environment variables**:
-   ```bash
-   # Windows
-   copy .env.example .env
+### Anti-cheat and proctoring
+- Per-attempt session token, server-side timer, auto-submit on expiry.
+- MCQ options randomized per delivery; grading uses option values.
+- Violation events: fullscreen exit, tab switch, clipboard, DevTools.
+- Configurable violation threshold triggers auto-submission.
+- IP and fingerprint are stored for audit; they are not continuously compared.
+- Fullscreen enforcement is a client-side control, not a backend guarantee.
 
-   # Linux / macOS
-   cp .env.example .env
-   ```
-
-6. **Generate a secure secret key**:
-   ```bash
-   python -c "import secrets; print(secrets.token_urlsafe(64))"
-   ```
-   Open `backend/.env` and assign the generated string to `JWT_SECRET_KEY`.
-
----
-
-### 3. Frontend Setup
-
-1. **Open a new terminal window, navigate to the frontend directory**:
-   ```bash
-   cd frontend
-   ```
-
-2. **Install Node dependencies**:
-   ```bash
-   npm install
-   ```
-
-3. **Configure environment variables**:
-   ```bash
-   # Windows
-   copy .env.local.example .env.local
-
-   # Linux / macOS
-   cp .env.local.example .env.local
-   ```
+### Code judge
+- `execute_code(language, code, test_cases, only_visible=False)` is the only
+  public interface.
+- `CODE_EXECUTION_BACKEND=local` runs a subprocess in the backend host (dev).
+- `CODE_EXECUTION_BACKEND=judge` POSTs to the isolated judge, which runs
+  read-only, non-root, with dropped capabilities, 1 CPU, 256 MB, 128 PIDs, and
+  a 64 MB `/tmp` tmpfs.
+- The judge grades hidden tests but only returns input/expected/actual for
+  visible samples. Reference solutions are never stored in MongoDB.
 
 ---
 
-### 4. Environment Variables Configuration
+## 5. Data model summary
 
-#### Backend (`backend/.env`)
-| Variable | Default Value | Description |
+24 collections in `placer_db`. Key relationships:
+
+```text
+users 1──1 students | tpos | admins          (by user_id)
+students 1──* resumes                         (by student profile _id)
+students 1──* applications                    (by student profile _id)
+placement_drives 1──* applications             (by drive_id)
+placement_drives *──1 companies                (by company_id)
+assessments 1──* assessment_attempts           (by assessment_id)
+students 1──* knowledge_states                 (by student_id, skill_tag)
+```
+
+Collections: `users`, `refresh_tokens`, `password_reset_tokens`, `students`,
+`tpos`, `admins`, `resumes`, `placement_drives`, `companies`, `applications`,
+`question_categories`, `questions`, `assessments`, `assessment_templates`,
+`assessment_attempts`, `knowledge_states`, `activity_logs`, `notifications`
+(index-only/unused), `unmapped_skill_suggestions`, `knowledge_chunks`,
+`insights_narrative_cache`, `job_market_postings`, `market_skill_catalog`,
+`market_import_runs`.
+
+**Critical ID rule:** `users._id` is the auth identity. Operational records use
+the profile `_id` (`students._id`, `tpos._id`, `admins._id`), resolved through
+`StudentRepository.get_by_user_id()`. Mixing them causes “not found” bugs.
+
+Seeded documents carry `data_origin` and `is_synthetic` for internal audit;
+these are not shown as user-facing demo labels.
+
+---
+
+## 6. API surface (summary)
+
+All routes are under `/api/v1` unless noted. The full table is in
+`docs/PLACER_SYSTEM_DESIGN_AND_DATA_FLOW.md` §11.
+
+| Area | Prefix | Highlights |
 |---|---|---|
-| `APP_NAME` | `PLACER API` | Application title |
-| `APP_ENV` | `development` | Environment mode (`development`/`production`) |
-| `MONGODB_URI` | `mongodb://localhost:27017` | MongoDB connection string |
-| `MONGODB_DB_NAME` | `placer_db` | Target MongoDB database name |
-| `JWT_SECRET_KEY` | *(Required)* | 64-character random secure key |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | `15` | Access token lifespan |
-| `REFRESH_TOKEN_EXPIRE_DAYS` | `7` | Refresh token lifespan |
-| `STORAGE_BACKEND` | `local` | Resume storage mode (`local` / `cloudinary`) |
-| `LOCAL_STORAGE_PATH` | `./storage` | Directory for uploaded resume PDFs |
-| `OCR_ENABLED` | `true` | Enable/disable OCR fallback engine |
-| `OCR_LANG` | `en` | OCR recognition language (`en`, `ch`, etc.) |
-| `OCR_USE_GPU` | `false` | Enable GPU acceleration for PaddleOCR |
-| `OCR_USE_ANGLE_CLS` | `true` | Angle classifier for rotated/skewed scans |
-| `OCR_CONFIDENCE_THRESHOLD` | `0.5` | Minimum OCR line detection confidence |
-| `OCR_TRIGGER_MIN_CHARS` | `50` | Char threshold below which OCR triggers |
-| `OCR_MIN_ALPHANUMERIC_RATIO` | `0.5` | Min alnum ratio for valid digital text |
-| `OCR_RENDER_DPI` | `150` | PDF page rendering raster DPI |
-| `GOOGLE_CLIENT_ID` | `""` | Optional Google OAuth Client ID |
-| `LLM_PRIMARY_PROVIDER` | `nvidia_nim` | Primary LLM Provider (`nvidia_nim` / `openrouter` / `ollama`) |
-| `LLM_PRIMARY_MODEL` | `nvidia/nemotron-4-340b-instruct` | LLM model identifier |
-| `LLM_PRIMARY_API_KEY` | `""` | API key for primary LLM |
+| Health | `/health` | `GET /health` (also root alias) |
+| Auth | `/auth` | register student/TPO, login, Google, refresh, logout, forgot/reset, me |
+| Students | `/students` | get/update own profile |
+| Resumes | `/resumes` | upload, history, detail, download, reparse, autofill suggestion/apply |
+| Drives | `/drives` | CRUD, mine, clone, apply, applications, screening, recommended shortlist, bulk status, export |
+| Questions | `/questions` | categories, CRUD, stats, import preview/commit/error report, exports |
+| Assessments | `/assessments` | templates, placement generate/revise/participation, start, questions, answer, finish, run-code, violation, results, knowledge states, review/grade |
+| Analytics | `/analytics` | TPO, student, application analytics/records, drive ranking/applicants/participants, skill gaps, admin, activity, admin applications |
+| Market | `/analytics/tpo/market` | market, filters, comparison |
+| Matching | `/matching` | drive score, recommended drives, ranked applicants |
+| Applications | `/applications` | per-application explanation |
+| Gap analysis | `/assessments/attempts/{id}/gap-analysis` | attempt-level gaps |
+| Insights | `/insights/me` | student insights narrative |
+| JD explanation | `/drives/{id}/match-explanation` | explain a drive match |
+| Knowledge admin | `/admin/knowledge` | chunks, delete source, stats |
+| Observability | `/admin/observability/llm` | LLM/embedding metrics |
 
-#### Frontend (`frontend/.env.local`)
-| Variable | Default Value | Description |
-|---|---|---|
-| `NEXT_PUBLIC_API_URL` | `http://localhost:8000` | Backend API base URL |
-| `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | `""` | Optional Google OAuth Web Client ID |
+The backend registers **104 route decorators** across 16 routers; the health
+route is mounted twice (`/api/v1/health` and the unprefixed `/health` alias),
+so the API exposes 105 method/path pairs.
 
 ---
 
-### 5. Database & Admin Bootstrapping
+## 7. Security
 
-1. **Start MongoDB**:
-   - **Option A — Docker Compose**:
-     ```bash
-     # From project root
-     docker compose up -d mongodb
-     ```
-   - **Option B — Local MongoDB Service**: Ensure the MongoDB service is running on port `27017`.
-   - **Option C — MongoDB Atlas**: Set your `MONGODB_URI` in `backend/.env`.
-
-2. **Bootstrap the Administrator Account (One-Time CLI)**:
-   ```bash
-   cd backend
-   python -m scripts.create_admin
-   ```
-   Follow the interactive prompt to set the administrator's Name, Email, and Password.
-
-3. **Start the FastAPI Backend**:
-   ```bash
-   cd backend
-   uvicorn app.main:app --reload --port 8000
-   ```
-   *Swagger API Documentation: [http://localhost:8000/api/docs](http://localhost:8000/api/docs)*
-
-4. **Start the Next.js Frontend**:
-   ```bash
-   cd frontend
-   npm run dev
-   ```
-   *Web Application: [http://localhost:3000](http://localhost:3000)*
+- Access JWT lives in memory only (15 minutes by default).
+- Refresh token is an httpOnly, SameSite=Lax cookie (7 days) and rotates on
+  every use; replay of an old token fails.
+- RBAC is enforced at the FastAPI dependency layer.
+- Uploads are capped at 5 MB, require `%PDF`, and are deduplicated by SHA-256.
+- Question imports cap file size, row count, and cell length; formulas are never
+  evaluated; CSV exports neutralize formula injection.
+- Rate limiting is applied only to selected routes (`10/min` auth,
+  `20/min` insights); it is not global, and the configured
+  `RATE_LIMIT_DEFAULT` is currently unused.
+- Production startup rejects unsafe defaults (`DEBUG`, default JWT secret,
+  insecure cookie, wildcard CORS).
+- Global exception handler hides stack traces.
+- Known gaps: the local code runner is not a hardened sandbox; anti-cheat is
+  partially client-side; some collections lack explicit TTL/index coverage.
 
 ---
 
-## 📡 API Reference
+## 8. Testing and quality
 
-### 🔐 Authentication (`/api/v1/auth`)
-| Method | Endpoint | Access | Description |
-|---|---|---|---|
-| `POST` | `/auth/register/student` | Public | Register new Student account |
-| `POST` | `/auth/register/tpo` | Public | Register new TPO account |
-| `POST` | `/auth/login` | Public | Authenticate user, receive JWT & httpOnly refresh cookie |
-| `POST` | `/auth/google` | Public | Google Identity OAuth token verification |
-| `POST` | `/auth/refresh` | Public | Rotate refresh token & receive new access token |
-| `POST` | `/auth/logout` | Authenticated | Revoke refresh token & clear cookies |
-| `GET` | `/auth/me` | Authenticated | Retrieve current user profile & role |
-
-### 📄 Resumes (`/api/v1/resumes`)
-| Method | Endpoint | Access | Description |
-|---|---|---|---|
-| `POST` | `/resumes` | Student | Upload new PDF resume (deduplicates & parses) |
-| `GET` | `/resumes/history` | Student | Get all uploaded resume versions |
-| `GET` | `/resumes/{id}` | Student/TPO/Admin | Fetch parsed details for a specific resume |
-| `GET` | `/resumes/{id}/download` | Student/TPO/Admin | Secure stream download of resume PDF |
-| `POST` | `/resumes/{id}/reparse` | Student | Trigger synchronous re-parsing pipeline |
-
-### 🏢 Placement Drives (`/api/v1/drives`)
-| Method | Endpoint | Access | Description |
-|---|---|---|---|
-| `GET` | `/drives` | Authenticated | Browse available drives |
-| `POST` | `/drives` | TPO | Create a new placement drive |
-| `GET` | `/drives/mine` | TPO | List drives created by the authenticated TPO |
-| `GET` | `/drives/{id}` | Authenticated | Get drive details & eligibility criteria |
-| `PUT` | `/drives/{id}` | TPO (Owner) | Update drive details |
-| `DELETE` | `/drives/{id}` | TPO (Owner) | Delete a placement drive |
-| `POST` | `/drives/{id}/apply` | Student | Apply to drive (enforces eligibility) |
-| `GET` | `/drives/{id}/applications`| TPO (Owner) | List applicants for a drive |
-| `PATCH`| `/drives/{id}/applications/{app_id}`| TPO (Owner) | Update candidate status (`shortlisted`, `selected`, etc.) |
-
-### 🎯 Semantic Matching (`/api/v1/matching`)
-| Method | Endpoint | Access | Description |
-|---|---|---|---|
-| `GET` | `/matching/drives/{id}/score` | Student | Compute calibrated match score for active resume |
-| `GET` | `/matching/recommended-drives` | Student | Get top recommended drives sorted by match score |
-| `GET` | `/matching/drives/{id}/ranked-applicants` | TPO (Owner) | Get AI-ranked applicants for a drive |
-
-### 📝 Assessments & Knowledge Tracing (`/api/v1/assessments`)
-| Method | Endpoint | Access | Description |
-|---|---|---|---|
-| `GET` | `/assessments` | Authenticated | List all active assessments |
-| `POST` | `/assessments` | Admin | Create new assessment & anti-cheat policy |
-| `POST` | `/assessments/{id}/start` | Student | Start adaptive attempt, receive session token & 1st question |
-| `POST` | `/assessments/attempts/{id}/answer` | Student | Submit answer, update mastery, fetch next question |
-| `POST` | `/assessments/attempts/{id}/violation` | Student | Record client-side anti-cheat violation event |
-| `GET` | `/assessments/attempts/{id}/results` | Student | Retrieve comprehensive score breakdown |
-| `GET` | `/assessments/knowledge-states/me` | Student | Retrieve own skill mastery percentages |
-| `GET` | `/assessments/knowledge-states/{student_id}` | TPO/Admin | Inspect specific student's mastery radar |
-
-### 📊 Analytics (`/api/v1/analytics`)
-| Method | Endpoint | Access | Description |
-|---|---|---|---|
-| `GET` | `/analytics/tpo` | TPO | Application status breakdown & drive funnels for owned drives |
-| `GET` | `/analytics/admin` | Admin | Platform-wide placement rates, attempts, and weakest skills |
-
----
-
-## 🧪 Running Automated Tests
-
-The test suite includes over **100 automated unit and integration tests** built on `pytest` and `mongomock-motor` (requiring no live MongoDB instance to execute):
-
-```bash
+```powershell
 cd backend
-.venv\Scripts\Activate.ps1   # or source .venv/bin/activate on Unix
-python -m pytest -v
+.venv\Scripts\python.exe -m pytest -q          # 331 tests collected
 ```
 
-### Test Suite Highlights:
-- `test_auth.py`: Registration, token rotation, RBAC, Google OAuth mocking.
-- `test_resumes.py`: Versioning, magic-byte PDF validation, download security.
-- `test_resume_parsing_units.py`: Contact extraction, section parsing, skill normalizer.
-- `test_drives.py`: Drive CRUD, eligibility engine, duplicate prevention.
-- `test_assessments.py`: Adaptive difficulty progression, anti-cheat violations, knowledge tracing.
-- `test_matching.py`: Semantic inference, Platt calibration, hybrid ranking formulas.
-- `test_analytics.py`: TPO/Admin aggregation and status calculation.
+The suite uses `mongomock-motor`, so no live MongoDB is required. Matching tests
+need the model weights; the rest of the suite does not. Frontend checks:
+
+```powershell
+cd frontend
+npm run typecheck
+npm run lint
+npm run build
+```
+
+Coverage areas include auth/token rotation, resume upload/versioning/parsing,
+drive eligibility and applications, adaptive and standardized assessments,
+manual review, code execution, matching/calibration, analytics, market
+analytics, skill gaps, insights, screening, and API contracts.
 
 ---
 
-## 🔒 Security & Authentication
+## 9. Seed data and operations
 
-- **In-Memory JWT Access Tokens**: 15-minute access tokens stored exclusively in memory on the client to eliminate XSS token theft vectors.
-- **Rotating httpOnly Refresh Cookies**: 7-day refresh tokens stored in secure, `httpOnly`, `SameSite=Lax` cookies. Each refresh request revokes the previous token and issues a new one (Replay-Resistant Rotation).
-- **Role-Based Access Control (RBAC)**: Enforced strictly at the FastAPI dependency layer via `require_role("student" | "tpo" | "admin")`.
-- **Content-Addressable Upload Validation**: PDF validation checks file magic bytes (`%PDF`), enforce strict size limits ($<5\text{MB}$), and deduplicate uploads via SHA-256 hashing.
-- **Rate Limiting**: Integrated `slowapi` rate limiters on sensitive endpoints (`10/min` on auth routes, `100/min` global).
+```powershell
+cd backend
+.venv\Scripts\python.exe -m scripts.reset_db --yes
+.venv\Scripts\python.exe -m scripts.seed.run_all
+.venv\Scripts\python.exe -m scripts.seed.run_all --verify-only
+.venv\Scripts\python.exe -m scripts.seed_job_market
+.venv\Scripts\python.exe -m scripts.import_job_market --all
+```
 
----
-
-## ❓ Troubleshooting & FAQs
-
-#### Q1: Why do matching endpoints return `503 Service Unavailable`?
-> **Answer**: The ML weights (`bi_encoder/model.safetensors`, `cross_encoder/model.safetensors`, and `calibrator.pkl`) are missing from `backend/app/ml/matching/artifacts/`. All non-ML features will continue to work normally. Add the required model files to unblock AI matching.
-
-#### Q2: How do I create an Administrator account?
-> **Answer**: By design, there is no public `/register/admin` endpoint for security reasons. Run the interactive CLI script:
-> ```bash
-> cd backend
-> python -m scripts.create_admin
-> ```
-
-#### Q3: Google Sign-In button doesn't show up on the frontend.
-> **Answer**: Ensure `NEXT_PUBLIC_GOOGLE_CLIENT_ID` in `frontend/.env.local` and `GOOGLE_CLIENT_ID` in `backend/.env` are populated with a valid Google OAuth Web Client ID from Google Cloud Console.
-
-#### Q4: Next.js build shows peer dependency warnings.
-> **Answer**: The repository includes a `frontend/.npmrc` with `legacy-peer-deps=true` to ensure clean resolution with React 19. If installing packages manually, run `npm install --legacy-peer-deps`.
+Dataset: 500 questions (420 MCQ / 60 coding / 20 descriptive), 50 students,
+14 companies, 18 drives, 6 templates, 25 assessments, 183 attempts,
+199 applications, 7,469 market postings. Password: `Placer@2026`
+(override with `PLACER_SEED_PASSWORD`). Full details:
+[`docs/SEED_DATA.md`](./docs/SEED_DATA.md).
 
 ---
 
-## 📄 License
+## 10. Known limitations
 
-This project is developed as an academic and engineering placement platform. Distributed under the MIT License. See `LICENSE` for details.
+- Live deployment (Vercel/Render/Atlas) is documented but not provisioned.
+- Matching requires the external model weights; otherwise match endpoints `503`.
+- LLM/RAG features require provider keys or Ollama; deterministic fallbacks
+  apply.
+- The local code runner is not a hardened sandbox — use the judge service.
+- Descriptive grading is API-only; the TPO Descriptive Review page was removed.
+- Anti-cheat events are recorded, but fullscreen/fingerprint are not enforced
+  server-side.
+- `notifications` is index-only; no notification UI or read/write path.
+- The admin applications workspace supports cross-drive records, analytics, and
+  status updates, but company CRUD and some admin management screens are not
+  implemented.
+- Drive deletion does not cascade-delete applications.
+
+For the authoritative gap list, see
+`docs/PLACER_SYSTEM_DESIGN_AND_DATA_FLOW.md` §16.

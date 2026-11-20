@@ -18,6 +18,7 @@
 %% companions cross-reference the groups but do not duplicate the definitions.
 %%
 %% Companion documents:
+%%   docs/SYSTEM_FLOW.md
 %%   docs/PLACER_MATHEMATICAL_FORMULAS_AND_ALGORITHMS.md
 %%   docs/PLACER_SYSTEM_DESIGN_AND_DATA_FLOW.md
 %% ===========================================================================
@@ -57,12 +58,9 @@ flowchart TB
     subgraph ADMU["Admin interface — app/(admin)"]
       direction TB
       A_DASH["/admin/dashboard"]
-      A_ANALYTICS["/admin/dashboard/analytics"]
-      A_DRIVES["/admin/dashboard/drives"]
+      A_DRIVES["/admin/dashboard/drives<br/>cross-drive applications"]
       A_QUESTIONS["/admin/dashboard/questions<br/>/new"]
-      A_ASSESS["/admin/dashboard/assessments<br/>/new"]
-      A_TEMPLATES["/admin/dashboard/templates"]
-      A_PLACEMENT["/admin/dashboard/placement"]
+      A_ASSESS["/admin/dashboard/assessments<br/>/new (templates + placement generation)"]
     end
 
     HOOKS["TanStack Query hooks<br/>frontend/hooks/*.ts"]
@@ -1109,8 +1107,8 @@ flowchart LR
 
   subgraph E3B["Curate the question bank"]
     direction TB
-    AQ1["/questions<br/>GET /questions · /questions/stats"]
-    AQ2["/questions/new<br/>POST /questions · POST /questions/categories"]
+    AQ1["/admin/dashboard/questions<br/>GET /questions · /questions/stats"]
+    AQ2["/admin/dashboard/questions/new<br/>POST /questions · POST /questions/categories"]
     AQ3["Import<br/>POST /questions/import/preview<br/>POST /questions/import/commit"]
     AQ4["Export<br/>GET /questions/export/excel<br/>GET /questions/export/template"]
     AQ5["Status and edit<br/>PATCH /questions/{id}/status<br/>PUT /questions/{id}"]
@@ -1119,29 +1117,26 @@ flowchart LR
 
   subgraph E3C["Build assessments and templates"]
     direction TB
-    AA1["/templates<br/>GET /assessments/templates"]
-    AA2["/assessments/new<br/>POST /assessments"]
+    AA1["Manage templates dialog<br/>GET /assessments/templates"]
+    AA2["/admin/dashboard/assessments/new<br/>POST /assessments"]
     AA3["Presets<br/>GET /assessments/templates/presets"]
-    AA4["/placement<br/>GET /assessments/placement/eligibility"]
-    AA5["Generate<br/>POST /assessments/placement/generate"]
-    AA6["Revise<br/>POST /assessments/placement/{id}/revise"]
+    AA4["Standardized mode (inline)<br/>POST /assessments/placement/generate"]
+    AA5["Revise<br/>POST /assessments/placement/{id}/revise"]
     AA1 --> AA2
-    AA3 --> AA2
-    AA4 --> AA5 --> AA6
+    AA3 --> AA1
+    AA2 --> AA4 --> AA5
   end
 
   subgraph E3D["Oversee the platform"]
     direction TB
     AO1["/admin/dashboard<br/>GET /analytics/admin<br/>GET /analytics/admin/activity"]
-    AO2["/admin/dashboard/analytics<br/>GET /analytics/admin/applications"]
+    AO2["Applications workspace<br/>/admin/dashboard/drives<br/>GET /analytics/admin/applications"]
     AO3["Cross-drive decision<br/>PATCH /drives/{driveId}/applications/{appId}"]
-    AO4["/admin/dashboard/drives<br/>GET /drives/mine"]
-    AO5["Observability<br/>GET /admin/observability/llm"]
-    AO6["Knowledge store<br/>POST /admin/knowledge/chunks<br/>GET /admin/knowledge/stats"]
+    AO4["Observability<br/>GET /admin/observability/llm"]
+    AO5["Knowledge store<br/>POST /admin/knowledge/chunks<br/>GET /admin/knowledge/stats"]
     AO1 --> AO2 --> AO3
     AO1 --> AO4
     AO1 --> AO5
-    AO1 --> AO6
   end
 
   E3A --> E3B

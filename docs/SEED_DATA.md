@@ -83,8 +83,9 @@ produced by executing the reference solution through the real
 hidden. Reference solutions are never stored in MongoDB and are never part of
 an admin or student API response.
 
-Descriptive questions have `correct_answer=null` and are manual-graded.
-`explanation` is model-answer guidance for reviewers.
+Descriptive questions have `correct_answer=null` and are stored ungraded. The
+TPO **Descriptive Review** page has been removed, so grading is backend/API-only;
+`explanation` remains model-answer guidance for reviewers.
 
 ## Collections
 
@@ -243,8 +244,10 @@ docker compose exec backend python -m scripts.seed.run_all
 * The job-market set mixes 300 deterministic demo postings with 7,169 imported
   public postings. Re-run `python -m scripts.import_job_market --all` when you
   want a fresh pull; imports are idempotent by source URL.
-* Descriptive answers are manual-graded by design. A TPO (or admin) reviews
-  them from **TPO → Descriptive Review**; the student sees the score and
+* Descriptive answers are manual-graded by design. The TPO **Descriptive
+  Review** page has been removed; grading is backend/API-only
+  (`GET /assessments/review/pending`, `GET /assessments/attempts/{id}/review`,
+  `POST /assessments/attempts/{id}/grade`). The student sees the score and
   reviewer feedback on the result page once graded.
 * The `custom` template preset is a blank UI starting point with zero sections
   and is intentionally not persisted. Add at least one section before saving.

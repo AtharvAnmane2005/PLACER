@@ -19,8 +19,16 @@ Legend: ✅ Done · 🚧 In Progress · ⬜ Not Started
 | 13 | TPO dashboard | ✅ |
 | 14 | Admin dashboard | ✅ |
 | 15 | Analytics | ✅ |
-| 16 | Testing (full coverage pass) | ⬜ |
-| 17 | Deployment (Vercel/Render/Atlas live) | ⬜ |
+| 16 | Testing (full coverage pass) | ✅ (331 tests collected; coverage continues) |
+| 17 | Deployment (Vercel/Render/Atlas live) | 🚧 (documented, not provisioned) |
+
+> The phase log below is the original build history plus the later feature
+> phases (market analytics, rankings, skill gaps, UI cleanup). For the current
+> end state — OCR, LLM/RAG, insights, screening, observability, market import,
+> templates/placement generation, admin applications workspace, seed scripts,
+> and the isolated judge — see **“Current state (2026-11-20)”** at the end of
+> this file. Current behaviour is documented in
+> [`docs/SYSTEM_FLOW.md`](./docs/SYSTEM_FLOW.md).
 
 ---
 
@@ -1069,7 +1077,7 @@ Both phases were blocked from the start of this project on one thing: the traine
 Before writing any code, the actual training notebook (`PLACER_RoBERTa_Training_NEW.ipynb`) was read in full to extract the *exact* formulas, text templates, and preprocessing this model was trained on, rather than re-deriving them from the higher-level description in the original handoff summary. That surfaced several details worth recording here because they directly shaped the implementation and would be easy to get subtly wrong on a second pass:
 
 ### What the notebook actually specified (confirmed by reading the code, not just the description)
-- **Hybrid formula**: `final_score = 0.50 × calibrated_semantic + 0.35 × skills_score + 0.15 × experience_score` — matches the original handoff.
+- **Hybrid formula (historical)**: `final_score = 0.50 × calibrated_semantic + 0.35 × skills_score + 0.15 × experience_score` — this matched the original handoff. **Superseded:** the implemented formula is now `0.40 × semantic + 0.30 × skills + 0.20 × experience + 0.10 × assessment`; see “Current state (2026-11-20)” at the end of this file and Formulas §8.
 - **`skills_score` is coverage, not Jaccard**: `|resume_skills ∩ jd_skills| / max(1, |jd_skills|)`. A `jaccard()` helper exists in the notebook but is used elsewhere (weak-label pair generation), not in the actual scoring function — easy to misread if only skimming.
 - **Text templates are structured summaries, not raw text**: `"Technical skills: {sorted skills}. Experience years: {years}"` for resumes, and a longer template for JDs — both models were trained on these exact strings, not on raw resume/JD text.
 - **`CROSS_MAX_LENGTH` is actually 256**, despite a comment in the notebook claiming it was bumped to 512 — the comment is stale; the code that actually ran (and thus what the model was tokenized with) uses 256. Used 256 here, trusting the executed code over the comment.
@@ -2696,3 +2704,136 @@ headings now sit directly above their charts/tables.
 - Methodology metadata still lives in the API responses (`meta.notes`,
   disclaimers, tooltips); it is simply no longer rendered as dashboard
   text, so nothing was lost for future transparency features.
+
+---
+
+## Current state (2026-11-20)
+
+This section consolidates the work completed after the phase log above so the
+file reflects the system that is actually in the repository. It is a summary,
+not a replacement for the detailed design and formula documents.
+
+### Verified counts
+
+| Metric | Current value |
+|---|---|
+| Backend tests collected | **331** (`pytest --collect-only -q`) |
+| Route decorators | **104** across 16 routers; 105 method/path pairs including the `/health` alias |
+| MongoDB collections | **24** |
+| Matching formula | `0.40·semantic + 0.30·skills + 0.20·experience + 0.10·assessment` |
+| Seed questions | 500 (420 MCQ, 60 coding, 20 descriptive) |
+| Seed cohort | 50 students, 1 TPO, 1 admin |
+| Seed drives / companies | 18 / 14 |
+| Seed assessments / attempts | 25 / 183 |
+| Seed applications | 199 |
+| Seed market postings | 7,469 |
+
+### What was added after the original phases
+
+#### Resume ingestion and OCR
+- PaddleOCR PP-OCRv4 fallback with lazy singleton loading, config-gated by
+  `OCR_ENABLED`.
+- Text-quality heuristic (character count + alphanumeric ratio) triggers OCR
+  only for short/noisy/scanned PDFs.
+- OCR normalization preserves line boundaries for section parsing.
+- Profile autofill suggestion/apply endpoints built on the parsed resume.
+- Shared 135-skill taxonomy with 235 aliases.
+
+#### Matching, explanations, and LLM/RAG
+- Two-stage matcher (bi-encoder retrieval → cross-encoder rerank) plus Platt
+  calibration.
+- Hybrid score updated to four components; the assessment term is `1.0` when
+  no assessment is required or not yet scored.
+- Cached resume/JD embeddings with drive-edit invalidation.
+- Grounded narratives: application explanation, JD match explanation, student
+  insights, and per-attempt gap analysis.
+- MongoDB cosine knowledge store (`knowledge_chunks`) with admin
+  ingest/delete/stats endpoints.
+- LLM/embedding metrics endpoint at `GET /admin/observability/llm`.
+- Provider-agnostic client with primary/fallback, transient-only retries,
+  per-call thinking mode, and deterministic fallbacks.
+
+#### Screening and applications
+- `POST /drives/{id}/screen` recomputes match scores and reconciles assessment
+  pass/fail without changing shortlist/reject status.
+- Screening summary, recommended shortlist, bulk status updates, and CSV
+  export.
+- Admin cross-drive applications workspace and analytics/records endpoints.
+- Application status vocabulary normalized to `applied` / `shortlisted` /
+  `rejected`; legacy `selected` is mapped at read time.
+
+#### Assessment platform
+- Template presets and CRUD, duplicate/status operations.
+- Standardized placement-paper generation and revision with deterministic
+  section/difficulty quotas and explicit deficits instead of padding.
+- Drive participation reporting and per-drive ranking/applicant/participant
+  endpoints.
+- Adaptive and standardized attempt lifecycle; one-question-at-a-time delivery;
+  finish/results; knowledge-state updates.
+- Coding execution through the shared runner; hidden tests and reference
+  solutions never exposed.
+- Manual descriptive grading remains API-only.
+
+#### Analytics and market data
+- TPO analytics: application funnel, per-drive breakdown, rankings, applied
+  students, test participants.
+- Market Insights over 7,469 postings with filters, comparison, momentum,
+  provenance banner, and import-run metadata.
+- Skill-gap analysis combining market demand with assessment-demonstrated and
+  self-reported student evidence.
+- Student insights and focus ranking.
+- Admin analytics and activity summary.
+
+#### Operations and security
+- Isolated `judge` Compose service on internal `judge_net`, read-only,
+  non-root, capability-dropped, CPU/memory/PID-limited; backend uses
+  `CODE_EXECUTION_BACKEND=judge`.
+- Request-ID middleware, global exception handler, production config guard.
+- Google Sign-In origin/header fixes; the login page surfaces origin errors.
+- Deterministic seed package (`scripts/seed/`) plus verification mode,
+  market seed/import, and reset/backup tooling.
+- Descriptive Review TPO page removed (nav item and route deleted); grading is
+  backend/API-only. Student result display and the seeded dataset are
+  unchanged.
+
+### Current role surfaces
+
+| Role | Navigation |
+|---|---|
+| Student | Overview, Resume, Drives, Applications, Assessments, Insights, Profile |
+| TPO | Overview, Drives, Analytics, Market Insights, Skill Gaps |
+| Admin | Overview, Question bank, Assessments, Applications |
+
+### Current limitations
+
+- Live deployment is documented but not provisioned.
+- Matching requires external model weights; otherwise match endpoints `503`.
+- LLM/RAG requires provider keys or Ollama; deterministic fallbacks apply.
+- The local code runner is not a hardened sandbox; use the judge service.
+- Descriptive grading has no TPO UI.
+- Anti-cheat records violations and enforces timers, but fullscreen/fingerprint
+  are not backend-enforced.
+- `notifications` is index-only/unused.
+- The admin applications workspace supports cross-drive records, analytics, and
+  status updates; company CRUD and some management screens are absent.
+- Drive deletion does not cascade-delete applications.
+- Rate limiting covers selected routes only.
+- Some newer collections (`password_reset_tokens`, `knowledge_chunks`,
+  `insights_narrative_cache`) lack explicit startup indexes/TTLs.
+
+### Verification commands
+
+```powershell
+cd backend
+.venv\Scripts\python.exe -m pytest -q
+.venv\Scripts\python.exe -m scripts.seed.run_all --verify-only
+
+cd ..\frontend
+npm run typecheck
+npm run lint
+npm run build
+```
+
+For the authoritative collection inventory, API reference, and gap list, see
+[`docs/PLACER_SYSTEM_DESIGN_AND_DATA_FLOW.md`](./docs/PLACER_SYSTEM_DESIGN_AND_DATA_FLOW.md).
+For end-to-end behaviour, see [`docs/SYSTEM_FLOW.md`](./docs/SYSTEM_FLOW.md).

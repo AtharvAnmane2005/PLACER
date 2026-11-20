@@ -15,6 +15,21 @@ const nextConfig = {
       },
     ];
   },
+  async headers() {
+    // Google Identity Services needs the page origin in the Referer and needs
+    // to keep a handle on its sign-in popup. Next's defaults are usually
+    // enough, but setting them explicitly avoids "origin is not allowed" and
+    // blank-popup regressions when deploy configs add stricter headers.
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          { key: "Cross-Origin-Opener-Policy", value: "same-origin-allow-popups" },
+        ],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

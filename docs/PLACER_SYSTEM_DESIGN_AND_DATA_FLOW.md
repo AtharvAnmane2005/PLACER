@@ -16,10 +16,11 @@
 
 ### Companion documents
 
-This document is one of exactly three project documents. They are designed to be read together:
+This document is one of four project documents. They are designed to be read together:
 
 | Document | What it answers |
 |---|---|
+| [`SYSTEM_FLOW.md`](./SYSTEM_FLOW.md) | How the system behaves end to end: actors, request lifecycle, resume/OCR/matching, drives/applications/screening, assessments/judge/grading, analytics/market/skill gaps/insights, RAG/LLM, and data stores. Start here for behaviour. |
 | [`PLACER_SYSTEM_ARCHITECTURE.mmd`](./PLACER_SYSTEM_ARCHITECTURE.mmd) | What the system looks like: architecture, ER model, physical schema, DFD, role workflows, AI model flow (diagram groups A–F). |
 | [`PLACER_MATHEMATICAL_FORMULAS_AND_ALGORITHMS.md`](./PLACER_MATHEMATICAL_FORMULAS_AND_ALGORITHMS.md) | How every number is computed: formulas, variables, worked examples, implementation status, formula-to-code map. |
 | **This document** | How data moves: pages → hooks → endpoints → collections, lifecycles, per-chart processing, API reference, deployment, security. |
@@ -39,7 +40,7 @@ Cross-references in this document use the form:
 2. **§3–§5** document the three role interfaces page by page (Student, TPO, Admin). Each page lists its hooks, the exact API calls it makes, and the collections it touches.
 3. **§6–§9** describe the write paths and lifecycles: ingestion, the resume/AI pipeline, drive + assessment lifecycle, and application status lifecycle.
 4. **§10** explains, chart by chart, how each dashboard number is produced.
-5. **§11** is the complete API reference (all 101 route decorators, plus the `/health` alias).
+5. **§11** is the complete API reference (all 104 route decorators, plus the `/health` alias).
 6. **§12–§14** cover MongoDB lifecycle, deployment/runtime, and error handling/security.
 7. **§15** is a single end-to-end example, clearly marked as illustrative.
 8. **§16** lists every known gap and partial feature.
@@ -513,17 +514,16 @@ The admin shell is `frontend/app/(admin)/layout.tsx`.
 
 | # | Route | Purpose |
 |---|---|---|
-| 1 | `/admin/dashboard` | Platform overview |
-| 2 | `/admin/dashboard/analytics` | Platform analytics |
-| 3 | `/admin/dashboard/drives` | Applications workspace (cross-drive) |
-| 4 | `/admin/dashboard/questions` | Question bank |
-| 5 | `/admin/dashboard/questions/new` | New question |
-| 6 | `/admin/dashboard/assessments` | Assessments list |
-| 7 | `/admin/dashboard/assessments/new` | New assessment (adaptive/standardized) |
-| 8 | `/admin/dashboard/templates` | Assessment templates |
-| 9 | `/admin/dashboard/placement` | Drive Assessment generator |
+| 1 | `/admin/dashboard` | Platform overview (analytics, activity, assessment performance) |
+| 2 | `/admin/dashboard/drives` | Applications workspace (cross-drive) |
+| 3 | `/admin/dashboard/questions` | Question bank |
+| 4 | `/admin/dashboard/questions/new` | New question |
+| 5 | `/admin/dashboard/assessments` | Assessments list |
+| 6 | `/admin/dashboard/assessments/new` | New assessment (adaptive or standardized; templates managed in a dialog, placement generation inline) |
 
 > The applications workspace lives at `/admin/dashboard/drives` because the original route was preserved. Its visible title is **Applications**. The nav label is **Applications**.
+>
+> There are no separate `/admin/dashboard/analytics`, `/templates`, or `/placement` routes. Platform analytics render on the overview page; templates and Drive Assessment generation are dialogs/sections on `/admin/dashboard/assessments/new`. The template and placement **API** endpoints still exist (§5.3).
 
 ### 5.2 Page-by-page data flow
 
@@ -531,29 +531,22 @@ The admin shell is `frontend/app/(admin)/layout.tsx`.
 
 | Aspect | Detail |
 |---|---|
-| Hooks | `use-analytics`, `use-admin-questions`, `use-assessments` |
-| Endpoints | `GET /analytics/admin`; `GET /analytics/admin/activity`; `GET /questions/categories`; `GET /questions/stats`; `GET /assessments` |
-| Collections | `users`, `students`, `tpos`, `admins`, `placement_drives`, `applications`, `companies`, `questions`, `question_categories`, `assessments`, `assessment_attempts` |
-| Cards | Categories; Questions; Assessments; Total students; Total applications; Applications under review; Shortlisted applications; Rejected applications |
-| Charts | **Application status** donut (all drives); **Platform snapshot**; **User distribution** donut; **Students by department** horizontal bars; **Monthly platform activity** trend line |
-| Notes | The former "Placement snapshot" was replaced by "Platform snapshot" because no placement-offer collection exists. The API still computes `placed_students`/`placement_rate_pct` from legacy `selected` rows, but the UI does not present them as a placement metric. |
+| Hooks | `useAdminAnalytics`, `useAdminActivity` |
+| Endpoints | `GET /analytics/admin`; `GET /analytics/admin/activity` |
+| Collections | `users`, `students`, `tpos`, `admins`, `placement_drives`, `applications`, `companies`, `assessments`, `assessment_attempts`, `questions`, `question_categories` |
+| Cards | Students; Companies; Drives (open/closed split); Applications; TPOs |
+| Charts | **Platform snapshot** (students, companies, drives, students with applications); **User distribution** donut (students/TPOs/admins); **Assessment performance** metric grid (assessments, attempts, submitted, average score, completion rate, questions, categories) |
+| Notes | This page is the only admin analytics surface; there is no separate `/admin/dashboard/analytics` route. `GET /analytics/admin/activity` also returns monthly activity and department counts, but the page currently renders only `user_distribution`. The former "Placement snapshot" is absent because no placement-offer collection exists; `placed_students`/`placement_rate_pct` remain legacy API fields and are not shown as a placement metric. |
 
-#### 5.2.2 `/admin/dashboard/analytics` — platform analytics
+#### 5.2.2 Admin analytics (no separate page)
 
-| Aspect | Detail |
-|---|---|
-| Hooks | `use-analytics` |
-| Endpoints | `GET /analytics/admin` |
-| Collections | `users`, `students`, `tpos`, `placement_drives`, `applications`, `companies`, `assessments`, `assessment_attempts`, `questions`, `question_categories`, `knowledge_states` |
-| Cards | Students; TPOs; Companies; Drives (total, with open count) |
-| Charts | **Application status breakdown** (three-way, mutually exclusive); **Assessment performance** card (assessments, attempts, submitted attempts, average score, question bank); **Skill mastery overview** list (average mastery per skill, weakest first) |
-| Notes | `legacy_selected` is exposed internally for audit but is not shown as a stage. |
+Platform analytics are rendered on `/admin/dashboard` (§5.2.1). The `GET /analytics/admin` payload also exposes `application_breakdown`, `skill_mastery_overview`, and assessment totals, but the overview page does not currently chart the status breakdown or the skill-mastery list. They remain available to API clients and future UI work.
 
 #### 5.2.3 `/admin/dashboard/drives` — Applications workspace
 
 | Aspect | Detail |
 |---|---|
-| Hooks | `use-analytics`, `use-tpo-drives`, `use-toast` |
+| Hooks | `useAdminApplications`, `useAdminApplicationFilters`, `useUpdateApplicationStatusForDrive`, `use-toast` |
 | Endpoints | `GET /analytics/admin/applications`; `GET /analytics/admin/applications/filters`; `PATCH /drives/{drive_id}/applications/{application_id}` |
 | Collections | `applications`, `students`, `placement_drives`, `companies`, `assessments`, `assessment_attempts` |
 | Cards | Total applications; Applied / Under review; Shortlisted; Rejected |
@@ -592,29 +585,27 @@ The admin shell is `frontend/app/(admin)/layout.tsx`.
 
 | Aspect | Detail |
 |---|---|
-| Hooks | `use-admin-assessments`, `use-admin-questions`, `use-assessment-templates`, `use-drives`, `use-placement-assessments`, `use-toast` |
-| Endpoints | `POST /assessments`; `GET /questions`; `GET /questions/categories`; `GET /assessments/templates`; `GET /drives`; `POST /assessments/placement/eligibility`; `POST /assessments/placement/generate` |
+| Hooks | `useCreateAssessment`, `useCategories`, `useTemplates`, `useGeneratePlacementAssessment`, `useDrives`, `use-toast`; the template dialog adds `useTemplatePresets`, `useCreateTemplate`, `useUpdateTemplate`, `useDuplicateTemplate`, `useSetTemplateStatus` |
+| Endpoints | `POST /assessments`; `GET /questions/categories`; `GET /assessments/templates`; `GET /drives`; `POST /assessments/placement/generate`; template dialog: `GET /assessments/templates/presets`, `GET /assessments/templates/{id}`, `POST /assessments/templates`, `PUT /assessments/templates/{id}`, `POST /assessments/templates/{id}/duplicate`, `PATCH /assessments/templates/{id}/status`, `DELETE /assessments/templates/{id}` |
 | Collections | `assessments`, `questions`, `assessment_templates`, `placement_drives` |
-| Modes | `adaptive` (legacy pool) and `standardized` (generated through placement endpoints) |
-| Notes | `POST /assessments` rejects `format=standardized` with `400`; standardized assessments must be generated via `POST /assessments/placement/generate`. |
+| Modes | `adaptive` (legacy pool) and `standardized` (generated through the placement endpoint) |
+| Notes | `POST /assessments` rejects `format=standardized` with `400`; standardized assessments must be generated via `POST /assessments/placement/generate`. The **Manage templates** button opens `TemplateManagerDialog`; there is no separate templates route. |
 
-#### 5.2.8 `/admin/dashboard/templates` — templates
+#### 5.2.8 Assessment templates (dialog, no route)
 
-| Aspect | Detail |
+Templates are created, edited, duplicated, activated/deactivated, and deleted inside the template dialog on `/admin/dashboard/assessments/new`. The full template API (§5.3) is unchanged. The `custom` preset is a blank starting point and is not persisted by the seed.
+
+#### 5.2.9 Drive Assessment generator (inline, no route)
+
+Standardized Drive Assessment generation happens in the **Standardized placement assessment** mode of `/admin/dashboard/assessments/new`. It calls `POST /assessments/placement/generate` (and can revise via `POST /assessments/placement/{assessment_id}/revise`). Participation is read through `GET /assessments/placement/{drive_id}/participation`.
+
+| Rule | Detail |
 |---|---|
-| Hooks | `use-assessment-templates`, `use-toast` |
-| Endpoints | `GET /assessments/templates/presets`; `GET /assessments/templates`; `GET /assessments/templates/{template_id}`; `POST /assessments/templates`; `PUT /assessments/templates/{template_id}`; `POST /assessments/templates/{template_id}/duplicate`; `PATCH /assessments/templates/{template_id}/status`; `DELETE /assessments/templates/{template_id}` |
-| Collections | `assessment_templates` |
-
-#### 5.2.9 `/admin/dashboard/placement` — Drive Assessment generator
-
-| Aspect | Detail |
-|---|---|
-| Hooks | `use-placement-assessments`, `use-assessment-templates`, `use-drives`, `use-toast` |
-| Endpoints | `POST /assessments/placement/eligibility`; `POST /assessments/placement/generate`; `POST /assessments/placement/{assessment_id}/revise`; `GET /assessments/placement/{drive_id}/participation` |
-| Collections | `assessments`, `questions`, `placement_drives`, `assessment_attempts` |
-| Rules | Five sections; 20 questions; 6 easy / 10 medium / 4 hard; 4 questions per section; deterministic selection. Deficits are reported explicitly rather than padded. |
-| Notes | "Drive Assessment" is the UI name for the standardized placement-assessment generator. The old label "Placement Generator" is no longer used. |
+| Sections | Five: Quantitative Aptitude, Logical Reasoning, Verbal Ability, Technical Knowledge, Coding/Problem Solving |
+| Questions | 20 total; 4 per section; 6 easy / 10 medium / 4 hard |
+| Marks | 1 / 3 / 5 by difficulty; 56 total for seeded drives |
+| Selection | Deterministic; deficits are reported explicitly rather than padded |
+| Naming | "Drive Assessment" is the UI name; the old label "Placement Generator" is no longer used. |
 
 ### 5.3 Admin API surface (summary)
 
@@ -1099,24 +1090,25 @@ Student evidence uses only graded attempts on questions tagged with the skill. S
 
 | Chart | Source | Processing |
 |---|---|---|
-| Categories / Questions / Assessments | `GET /questions/categories`, `GET /questions/stats`, `GET /assessments` | Direct counts |
-| Student/application cards | `GET /analytics/admin` | `total_students`, `total_applications`, `application_breakdown.applied/shortlisted/rejected` |
-| Application status donut | `application_breakdown` | Reconciled three-way split |
-| Platform snapshot | `GET /analytics/admin` | Drives, companies, assessments, attempts, average score, skill mastery |
-| User distribution donut | `GET /analytics/admin/activity` → `user_distribution` | Students / TPOs / Admins |
-| Students by department | `GET /analytics/admin/activity` → `department_student_counts` | Students per canonical department, "Not specified" bucket |
-| Monthly platform activity | `GET /analytics/admin/activity` → `monthly_activity` | Per month: `new_students`, `new_drives`, `applications` |
+| Platform cards | `GET /analytics/admin` | Students, companies, drives (+ open/closed), applications, TPOs |
+| Platform snapshot | `GET /analytics/admin` | Total students, companies, drives, and students with at least one application |
+| User distribution donut | `GET /analytics/admin/activity` → `user_distribution` | Students / TPOs / Admins, counted once per account |
+| Assessment performance grid | `GET /analytics/admin` | Assessments, attempts, submitted attempts, average score, completion rate (submitted ÷ attempts), questions, categories |
 
-### 10.9 Admin analytics (`/admin/dashboard/analytics`)
+The page does not render the application-status donut, department distribution, monthly activity trend, or skill-mastery list. Those values are still returned by the analytics endpoints.
+
+### 10.9 Admin analytics data (`GET /analytics/admin`)
+
+There is no separate admin analytics page; these fields feed `/admin/dashboard` (§10.8).
 
 | Chart / element | Source | Processing |
 |---|---|---|
 | Stat cards | `GET /analytics/admin` | `total_students`, `total_tpos`, `total_companies`, `total_drives` (+ `open_drives`) |
 | Application status breakdown | `application_breakdown` | Reconciled three-way split + `legacy_selected` (internal, not plotted) |
 | Assessment performance | `total_assessments`, `total_attempts`, `submitted_attempts`, `average_score_pct`, `total_questions`, `total_categories` | Direct counts; average over submitted attempts with nonzero maximum marks |
-| Skill mastery overview | `skill_mastery_overview` | Per-skill average mastery across students with attempts, weakest first |
+| Skill mastery overview | `skill_mastery_overview` | Per-skill average mastery across students with attempts, weakest first (API-only; not rendered) |
 
-Monthly activity, department distribution, and user distribution are **not** on this page; they are on the platform overview (§10.8).
+`GET /analytics/admin/activity` also returns monthly activity and department counts, and `GET /analytics/admin` returns application-status and skill-mastery fields; the dashboard currently renders only `user_distribution` from the activity payload. The other values remain API-only.
 
 ### 10.10 Admin applications workspace (`/admin/dashboard/drives`)
 
@@ -1146,7 +1138,7 @@ Monthly activity, department distribution, and user distribution are **not** on 
 - **Auth:** `Authorization: Bearer <access JWT>`.
 - **Access column:** `public` = no auth; `auth` = any authenticated user; `student` / `tpo` / `admin` = role-restricted.
 - **Errors:** `{"detail": "..."}`. Some domain errors use a structured object (e.g. placement deficits). The global handler returns `{"detail": "An unexpected error occurred. Please try again later."}` with `500`.
-- **Total:** 101 route decorators across 16 routers, plus the unprefixed `GET /health` alias = 102 exposed method/path pairs.
+- **Total:** 104 route decorators across 16 routers, plus the unprefixed `GET /health` alias = 105 exposed method/path pairs.
 
 ### 11.2 Health
 
@@ -1623,6 +1615,7 @@ These are documented rather than silently ignored. See §16.
 
 | Question | Where to look |
 |---|---|
+| How does the system behave end to end? | [`SYSTEM_FLOW.md`](./SYSTEM_FLOW.md) |
 | What are the layers and components? | Architecture §A |
 | What are the entities and relationships? | Architecture §B |
 | What is the physical schema? | Architecture §C |
@@ -1665,9 +1658,9 @@ These are documented rather than silently ignored. See §16.
 
 ### 17.3 Maintenance rules
 
-1. **Keep the three documents in sync.** If an endpoint, collection, formula, or status rule changes, update the relevant document in the same change.
+1. **Keep the four documents in sync.** If an endpoint, collection, formula, or status rule changes, update the relevant document in the same change.
 2. **Do not reintroduce synthetic labels.** Provenance stays internal; only the Market Insights source banner is intentionally user-visible.
-3. **Do not add a fourth doc file** to `docs/` without an explicit decision; the project is scoped to exactly three.
+3. **Do not add a fifth doc file** to `docs/` without an explicit decision; the project is scoped to four (this design doc, `SYSTEM_FLOW.md`, the formulas doc, and the architecture `.mmd`).
 4. **Do not write legacy `selected` to the database.** Map at read time.
 5. **Do not infer placement from shortlisting.** No "Placed Students" metric without an offer collection.
 6. **Validate Mermaid before publishing.** Each `.mmd` group is standalone; paste it into a renderer after edits.
